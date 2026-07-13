@@ -242,10 +242,18 @@ final class AudioPipelineViewModel {
         }
     }
 
+    /// Stops the underlying pipeline. If the display is frozen (CONTEXT.md
+    /// "Freeze"), the on-screen snapshot is left exactly as-is rather than
+    /// force-cleared to a placeholder -- Stop (or a disconnect) happening
+    /// underneath a frozen display must not itself count as an "on-screen
+    /// update" (found by code review: this previously cleared the three
+    /// published properties directly, bypassing `freezeGate`, so Stop while
+    /// frozen silently blanked what was supposed to be a static snapshot).
     private func haltCapture() {
         streamTask?.cancel()
         streamTask = nil
         captureEngine.stop()
+        guard !isFrozen else { return }
         trackedFrequencyHz = nil
         latestMagnitudes = []
         splDb = nil

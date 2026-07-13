@@ -37,6 +37,7 @@ import Observation
 
 enum SignalGeneratorError: Error {
     case deviceRoutingFailed(OSStatus)
+    case deviceNotFound
 }
 
 @MainActor
@@ -171,7 +172,17 @@ final class SignalGeneratorEngine {
     private func startEngine(deviceID: String?) {
         haltEngine()
         do {
-            if let deviceID, let coreAudioDeviceID = deviceEnumerator.deviceID(forUID: deviceID) {
+            if let deviceID {
+                // A specific device was requested -- if Core Audio can no
+                // longer resolve it (vanished between selection and start),
+                // fail outright rather than silently starting on whatever
+                // AVAudioEngine's default output happens to be (found by
+                // code review: this previously fell through to the default
+                // output while still reporting `.running(deviceID)`,
+                // exactly the silent fallback ADR 0006 forbids).
+                guard let coreAudioDeviceID = deviceEnumerator.deviceID(forUID: deviceID) else {
+                    throw SignalGeneratorError.deviceNotFound
+                }
                 try route(to: coreAudioDeviceID)
             }
             try engine.start()
@@ -194,8 +205,13 @@ final class SignalGeneratorEngine {
     /// Reacts to Core Audio reporting the output device list changed --
     /// the disconnect half of ADR 0006 applied to Output Device: the active
     /// device disappearing stops the generator and shows disconnected
-    /// (never a silent fallback), while a previously-disconnected device
-    /// reappearing passively resumes playback.
+    /// (never a silent fallback). Unlike Input Device, a reappearing device
+    /// deliberately does NOT auto-resume playback (found by code review):
+    /// Input's passive reconnect only resumes silent analysis, but here it
+    /// would resume *audible* output with no tech action -- exactly the
+    /// "a test tone could suddenly start playing... audible to an
+    /// audience" risk ADR 0006 itself warns about. The tech must explicitly
+    /// turn the generator back on.
     private func refreshAvailableOutputDevices() {
         availableOutputDevices = deviceEnumerator.availableDevices()
         let availableIDs = Set(availableOutputDevices.map(\.id))
@@ -205,8 +221,8 @@ final class SignalGeneratorEngine {
         case (.running, .disconnected):
             haltEngine()
             connectionState = nextState
-        case (.disconnected, .running(let deviceID)):
-            startEngine(deviceID: deviceID)
+        case (.disconnected, .running):
+            connectionState = .stopped
         default:
             connectionState = nextState
         }
