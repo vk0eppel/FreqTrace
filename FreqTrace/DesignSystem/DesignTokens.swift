@@ -11,11 +11,13 @@
 
 import Foundation
 
-enum AppearanceMode {
-    case dark
-    case light
+enum AppearanceMode: String, CaseIterable, Identifiable {
+    case dark = "Dark"
+    case light = "Light"
 
     static let `default`: AppearanceMode = .dark
+
+    var id: String { rawValue }
 }
 
 struct ColorTokens {

@@ -9,8 +9,9 @@
 //  SPL Offset lives in the Measured Data row's SPL block instead (ticket
 //  #6), alongside the
 //  reading it offsets, not here. Line 2 -- Input Device (live, ticket #4),
-//  Appearance Mode (center), Output Device (live, ticket #14). Remaining
-//  groups are still placeholders pending their own tickets.
+//  Appearance Mode (live, ticket #10, center), Output Device (live, ticket
+//  #14). Remaining groups are still placeholders pending their own
+//  tickets.
 //
 
 import SwiftUI
@@ -18,6 +19,7 @@ import SwiftUI
 struct ControlsRowView: View {
     @Environment(\.theme) private var theme
     @Environment(AudioPipelineViewModel.self) private var trackedFrequencyViewModel
+    @Environment(AppearanceSettings.self) private var appearanceSettings
     @State private var signalGenerator = SignalGeneratorEngine()
 
     var body: some View {
@@ -56,10 +58,45 @@ struct ControlsRowView: View {
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .overlay {
-            placeholderGroup("Appearance")
+            appearanceControl
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
+    }
+
+    // Appearance Mode (ticket #10, ADR 0005): a manual Dark/Light toggle,
+    // deliberately independent of the macOS system appearance setting --
+    // Dark (default) for dim venues, high-contrast Light for direct
+    // sunlight. Writes straight to AppearanceSettings.mode, which
+    // AppShellView turns into the injected Theme every view reads.
+    private var appearanceControl: some View {
+        HStack(spacing: 6) {
+            Text("APPEARANCE")
+                .font(.system(size: Typography.controlSize, weight: .medium))
+                .foregroundStyle(theme.textDim)
+            ForEach(AppearanceMode.allCases) { mode in
+                appearanceButton(mode)
+            }
+        }
+        .padding(.horizontal, 18)
+    }
+
+    private func appearanceButton(_ mode: AppearanceMode) -> some View {
+        let isSelected = appearanceSettings.mode == mode
+        return Button {
+            appearanceSettings.mode = mode
+        } label: {
+            Text(mode.rawValue.uppercased())
+                .font(.system(size: Typography.controlSize, weight: .semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .foregroundStyle(isSelected ? theme.bg : theme.textDim)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isSelected ? theme.accent : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     // The Input Device control (ticket #4, CONTEXT.md "Input Device"): a
@@ -295,5 +332,6 @@ struct ControlsRowView: View {
     ControlsRowView()
         .environment(\.theme, Theme(mode: .dark))
         .environment(AudioPipelineViewModel())
+        .environment(AppearanceSettings())
         .frame(width: 1120)
 }

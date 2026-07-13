@@ -28,6 +28,9 @@ private struct WaterfallUniforms {
     var maxHz: Float
     var binResolutionHz: Float
     var columnCount: Float
+    /// Ticket #10: 0 = Dark ramp, 1 = Light ramp -- matches
+    /// Waterfall.metal's `waterfallColor` branch.
+    var isLightMode: Float
 }
 
 final class WaterfallRenderer: NSObject, MTKViewDelegate {
@@ -39,6 +42,11 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
 
     private let lock = OSAllocatedUnfairLock<[Float]?>(initialState: nil)
     private var historyBuffer: WaterfallHistoryBuffer
+    /// Ticket #10: written from the main actor (MetalWaterfallView.
+    /// updateNSView), read from draw(in:) (not guaranteed main thread) --
+    /// an OSAllocatedUnfairLock-guarded flag, same cross-thread handoff
+    /// pattern as pendingMagnitudes.
+    private let appearanceModeLock = OSAllocatedUnfairLock<AppearanceMode>(initialState: .default)
 
     init?(device: MTLDevice, config: AnalysisConfig) {
         guard let commandQueue = device.makeCommandQueue(),
@@ -83,6 +91,11 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
         lock.withLock { $0 = magnitudes }
     }
 
+    /// Ticket #10: called whenever AppearanceSettings.mode changes.
+    func setAppearanceMode(_ mode: AppearanceMode) {
+        appearanceModeLock.withLock { $0 = mode }
+    }
+
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
@@ -100,12 +113,14 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
             return
         }
 
+        let isLightMode = appearanceModeLock.withLock { $0 == .light }
         var uniforms = WaterfallUniforms(
             scrollOffset: historyBuffer.scrollOffset,
             minHz: Float(FrequencyAxis.minHz),
             maxHz: Float(FrequencyAxis.maxHz),
             binResolutionHz: Float(config.binResolutionHz),
-            columnCount: Float(historyBuffer.columnCount)
+            columnCount: Float(historyBuffer.columnCount),
+            isLightMode: isLightMode ? 1 : 0
         )
 
         encoder.setRenderPipelineState(pipelineState)

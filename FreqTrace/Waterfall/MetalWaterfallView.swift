@@ -16,6 +16,9 @@ import SwiftUI
 struct MetalWaterfallView: NSViewRepresentable {
     let magnitudes: [Float]
     let config: AnalysisConfig
+    /// Ticket #10: selects which of WaterfallColorMap's ramps the GPU
+    /// fragment shader samples from.
+    var appearanceMode: AppearanceMode = .default
 
     func makeCoordinator() -> WaterfallRenderer? {
         guard let device = MTLCreateSystemDefaultDevice() else { return nil }
@@ -35,6 +38,7 @@ struct MetalWaterfallView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: MTKView, context: Context) {
+        context.coordinator?.setAppearanceMode(appearanceMode)
         guard !magnitudes.isEmpty else { return }
         context.coordinator?.pushMagnitudes(magnitudes)
     }

@@ -32,6 +32,19 @@ enum WaterfallColorMap {
         Stop(position: 1.0, rgb: HexColor.rgb("#ffd166")),
     ]
 
+    /// CLAUDE.md "Waterfall Color Maps" -- Light mode: silence -> loudest
+    /// (ticket #10). Lightness *decreases* (inverted from Dark) since the
+    /// surface is light and the loudest content needs to stay the
+    /// darkest/most saturated to remain legible in direct sunlight.
+    static let light: [Stop] = [
+        Stop(position: 0.0, rgb: HexColor.rgb("#f4f5f6")),
+        Stop(position: 0.2, rgb: HexColor.rgb("#bcd6f2")),
+        Stop(position: 0.4, rgb: HexColor.rgb("#6f9fe0")),
+        Stop(position: 0.6, rgb: HexColor.rgb("#39599e")),
+        Stop(position: 0.8, rgb: HexColor.rgb("#5a2e6b")),
+        Stop(position: 1.0, rgb: HexColor.rgb("#2a0e33")),
+    ]
+
     /// Piecewise-linear interpolation across `stops` at normalized
     /// magnitude `t` (clamped to [0,1]).
     static func color(for t: Float, in stops: [Stop] = dark) -> SIMD3<Float> {

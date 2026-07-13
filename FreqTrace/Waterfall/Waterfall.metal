@@ -9,10 +9,11 @@
 //  -- resampling ~2000 columns x ~350 rows per frame on the CPU would be
 //  far more expensive than doing it once per screen pixel on the GPU.
 //
-//  The color ramp below must match FreqTrace/Waterfall/WaterfallColorMap.swift's
-//  `dark` stops exactly -- MSL can't call back into Swift, so if the ramp
-//  changes (see CLAUDE.md "Waterfall Color Maps"), both places need
-//  updating together.
+//  The color ramps below must match FreqTrace/Waterfall/WaterfallColorMap.swift's
+//  `dark`/`light` stops exactly -- MSL can't call back into Swift, so if
+//  either ramp changes (see CLAUDE.md "Waterfall Color Maps"), both places
+//  need updating together. isLightMode (ticket #10) selects which ramp
+//  waterfallColor samples from.
 //
 
 #include <metal_stdlib>
@@ -45,9 +46,10 @@ struct WaterfallUniforms {
     float maxHz;
     float binResolutionHz;
     float columnCount;
+    float isLightMode;
 };
 
-constant float3 kColorStops[6] = {
+constant float3 kDarkColorStops[6] = {
     float3(0x0b, 0x0d, 0x10) / 255.0, // silence
     float3(0x2b, 0x11, 0x50) / 255.0,
     float3(0x7c, 0x1c, 0x62) / 255.0,
@@ -55,19 +57,29 @@ constant float3 kColorStops[6] = {
     float3(0xe8, 0x75, 0x2b) / 255.0,
     float3(0xff, 0xd1, 0x66) / 255.0, // loudest
 };
+constant float3 kLightColorStops[6] = {
+    float3(0xf4, 0xf5, 0xf6) / 255.0, // silence
+    float3(0xbc, 0xd6, 0xf2) / 255.0,
+    float3(0x6f, 0x9f, 0xe0) / 255.0,
+    float3(0x39, 0x59, 0x9e) / 255.0,
+    float3(0x5a, 0x2e, 0x6b) / 255.0,
+    float3(0x2a, 0x0e, 0x33) / 255.0, // loudest
+};
 constant float kColorStopPositions[6] = { 0.0, 0.2, 0.4, 0.6, 0.8, 1.0 };
 
-static float3 waterfallColor(float t) {
+static float3 waterfallColor(float t, bool isLightMode) {
     t = clamp(t, 0.0, 1.0);
     for (int i = 0; i < 5; i++) {
         float a = kColorStopPositions[i];
         float b = kColorStopPositions[i + 1];
         if (t >= a && t <= b) {
             float localT = (b > a) ? (t - a) / (b - a) : 0.0;
-            return mix(kColorStops[i], kColorStops[i + 1], localT);
+            return isLightMode
+                ? mix(kLightColorStops[i], kLightColorStops[i + 1], localT)
+                : mix(kDarkColorStops[i], kDarkColorStops[i + 1], localT);
         }
     }
-    return kColorStops[5];
+    return isLightMode ? kLightColorStops[5] : kDarkColorStops[5];
 }
 
 fragment float4 waterfall_fragment(VertexOut in [[stage_in]],
@@ -91,5 +103,5 @@ fragment float4 waterfall_fragment(VertexOut in [[stage_in]],
     float texV = fract((1.0 - in.uv.y) + uniforms.scrollOffset);
 
     float magnitude = spectrumTexture.sample(s, float2(texU, texV)).r;
-    return float4(waterfallColor(magnitude), 1.0);
+    return float4(waterfallColor(magnitude, uniforms.isLightMode > 0.5), 1.0);
 }

@@ -96,6 +96,17 @@ struct WaterfallColorMapTests {
         #expect(WaterfallColorMap.color(for: -1) == WaterfallColorMap.color(for: 0))
         #expect(WaterfallColorMap.color(for: 2) == WaterfallColorMap.color(for: 1))
     }
+
+    @Test func lightRampEndpointsAndStopsMatchCLAUDEMdExactly() {
+        // CLAUDE.md "Waterfall Color Maps", Light mode: silence -> loudest
+        // (ticket #10). Lightness *decreases* -- loudest is near-black.
+        #expect(WaterfallColorMap.color(for: 0, in: WaterfallColorMap.light) == HexColor.rgb("#f4f5f6"))
+        #expect(WaterfallColorMap.color(for: 1, in: WaterfallColorMap.light) == HexColor.rgb("#2a0e33"))
+        #expect(WaterfallColorMap.color(for: 0.2, in: WaterfallColorMap.light) == HexColor.rgb("#bcd6f2"))
+        #expect(WaterfallColorMap.color(for: 0.4, in: WaterfallColorMap.light) == HexColor.rgb("#6f9fe0"))
+        #expect(WaterfallColorMap.color(for: 0.6, in: WaterfallColorMap.light) == HexColor.rgb("#39599e"))
+        #expect(WaterfallColorMap.color(for: 0.8, in: WaterfallColorMap.light) == HexColor.rgb("#5a2e6b"))
+    }
 }
 
 struct MagnitudeScalingTests {
