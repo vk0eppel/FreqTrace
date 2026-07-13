@@ -18,6 +18,14 @@
 //  a single color dot; the highest-severity row pulses, respecting
 //  accessibilityReduceMotion.
 //
+//  Fixed-width numeric readouts (user report: "space is moving when the
+//  frequency changes"): Tracked Frequency and SPL's digit count varies
+//  ("340 Hz" vs "12000 Hz"), which shifted every block after them since
+//  none had a fixed width. Fixed via the standard SwiftUI trick -- an
+//  invisible reference string at the widest plausible value reserves the
+//  layout width; the real (shorter-or-equal) value overlays on top,
+//  left-aligned, without affecting the container's size.
+//
 
 import SwiftUI
 
@@ -51,9 +59,14 @@ struct MeasuredDataRowView: View {
             divider
             dataBlock(label: "SPL") {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(trackedFrequencyViewModel.formattedSPL)
-                        .font(.system(size: Typography.secondarySize, weight: .semibold, design: .monospaced))
-                        .foregroundStyle(trackedFrequencyViewModel.splDb == nil ? theme.textFaint : theme.text)
+                    fixedWidth(
+                        reference: "-100 dB",
+                        font: .system(size: Typography.secondarySize, weight: .semibold, design: .monospaced)
+                    ) {
+                        Text(trackedFrequencyViewModel.formattedSPL)
+                            .font(.system(size: Typography.secondarySize, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(trackedFrequencyViewModel.splDb == nil ? theme.textFaint : theme.text)
+                    }
                     if let peak = trackedFrequencyViewModel.formattedSPLPeak {
                         peakLabel(peak)
                     }
@@ -146,9 +159,29 @@ struct MeasuredDataRowView: View {
     }
 
     private func heroValue(_ text: String) -> some View {
-        Text(text)
-            .font(.system(size: Typography.heroSize, weight: .semibold, design: .monospaced))
-            .foregroundStyle(trackedFrequencyViewModel.trackedFrequencyHz == nil ? theme.textFaint : theme.text)
+        // "24000 Hz" (5 digits) covers Nyquist at the default 48kHz config
+        // -- Tracked Frequency can never exceed sampleRate/2 (see
+        // FrequencyTracker.bestWeightedBin's nyquist guard).
+        fixedWidth(
+            reference: "24000 Hz",
+            font: .system(size: Typography.heroSize, weight: .semibold, design: .monospaced)
+        ) {
+            Text(text)
+                .font(.system(size: Typography.heroSize, weight: .semibold, design: .monospaced))
+                .foregroundStyle(trackedFrequencyViewModel.trackedFrequencyHz == nil ? theme.textFaint : theme.text)
+        }
+    }
+
+    /// Reserves layout width for the widest plausible value (`reference`,
+    /// rendered invisibly at `font`) so a shorter live value never shifts
+    /// anything positioned after this block (user report: "space is
+    /// moving when the frequency changes") -- `content` overlays on top,
+    /// left-aligned, at its own natural width.
+    private func fixedWidth(reference: String, font: Font, @ViewBuilder content: () -> some View) -> some View {
+        Text(reference)
+            .font(font)
+            .hidden()
+            .overlay(alignment: .leading) { content() }
     }
 }
 
