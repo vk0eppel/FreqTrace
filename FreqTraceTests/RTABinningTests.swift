@@ -93,4 +93,25 @@ struct RTABinningTests {
         #expect(quietBars[bin] < loudBars[bin])
         #expect(quietBars[bin] > 0.0)
     }
+
+    // Regression test for a real bug (user report: "under 63Hz we have
+    // only one per two RTA bar working"): below ~63Hz at the default
+    // config, the log-scaled bar width (as narrow as ~3Hz near 20Hz) is
+    // finer than the FFT's own bin resolution (~11.7Hz) -- forward
+    // bin->bar mapping then skips alternating bars entirely (bins land in
+    // bars 1,3,5,7... never 0,2,4,6...), leaving them silent forever
+    // regardless of actual signal.
+    @Test func lowFrequencyBarsAllReceiveEnergyEvenWhenCoarserThanBinResolution() {
+        // Uniform non-silent energy across every bin -- if any bar in the
+        // sub-63Hz region stays exactly at the floor, that bar never got a
+        // bin mapped to it.
+        let magnitudes = [Float](repeating: 1000, count: config.windowSize / 2)
+
+        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barCount: 48, fullScalePower: 1000)
+
+        let cutoffBar = Int(FrequencyAxis.normalizedPosition(forHz: 63) * 48)
+        for bar in 0...cutoffBar {
+            #expect(bars[bar] > 0, "bar \(bar) (below 63Hz) should not be silent")
+        }
+    }
 }

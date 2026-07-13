@@ -21,37 +21,65 @@ import Foundation
 enum RTABinning {
     static let defaultBarCount = 48
 
-    /// Each bar takes the loudest bin within its log-frequency range
-    /// (matching "highest level" semantics, not an average that could hide
-    /// a narrow peak), normalized via MagnitudeScaling. Bars with no bins
-    /// in range (audible range is coarser than a very high bar count near
-    /// the low end) stay at 0 (silence).
+    /// Each bar takes the loudest bin within its log-frequency range,
+    /// normalized via MagnitudeScaling ("highest level" semantics, not an
+    /// average that could hide a narrow peak).
     ///
-    /// `fullScalePower` (bug fix): raw vDSP FFT power is NOT already on a
-    /// [0,1]/dBFS scale -- a full-scale tone's raw power is on the order
-    /// of 10^6-10^7 for a 4096-point window, not ~1.0 -- so it must be
-    /// referenced against a calibrated full-scale power (the same
-    /// synthetic-reference-tone technique FrequencyTracker.weightedLevelDb
-    /// already uses for SPL) before MagnitudeScaling's -80/0dB floor/
-    /// ceiling means anything. Without this, every bin reads far above the
-    /// ceiling and clamps to 1.0 regardless of actual loudness -- reported
-    /// by a user as every RTA bar pegged to max / the waterfall reading
-    /// uniformly "too loud."
+    /// Bar-centric, not bin-centric (bug fix -- user report: "under 63Hz
+    /// we have only one per two RTA bar working"): below ~63Hz at the
+    /// default config, the log-scaled bar width (as narrow as ~3Hz near
+    /// 20Hz) is finer than the FFT's own bin resolution (~11.7Hz). Forward
+    /// bin->bar mapping (iterate bins, place each into whichever bar its
+    /// frequency falls in) then skips alternating bars entirely -- bins
+    /// land in bars 1, 3, 5, 7... never 0, 2, 4, 6... -- leaving them
+    /// silent forever regardless of actual signal, since nothing ever
+    /// wrote to them. Iterating per BAR instead and looking up whichever
+    /// bin(s) fall in its frequency range guarantees every bar gets a
+    /// value: multiple bins in range (the common case higher up, where a
+    /// bar spans many bins) still takes the loudest; zero bins in range
+    /// (the low-frequency case) falls back to the single nearest bin
+    /// rather than staying silent.
+    ///
+    /// `fullScalePower` (separate bug fix): raw vDSP FFT power is NOT
+    /// already on a [0,1]/dBFS scale -- a full-scale tone's raw power is
+    /// on the order of 10^6-10^7 for a 4096-point window, not ~1.0 -- so
+    /// it must be referenced against a calibrated full-scale power (the
+    /// same synthetic-reference-tone technique
+    /// FrequencyTracker.weightedLevelDb already uses for SPL) before
+    /// MagnitudeScaling's -80/0dB floor/ceiling means anything.
     static func bars(magnitudes: [Float], config: AnalysisConfig, barCount: Int = defaultBarCount, fullScalePower: Float) -> [Float] {
         guard barCount > 0, !magnitudes.isEmpty else { return [] }
         let safeFullScalePower = max(fullScalePower, .leastNormalMagnitude)
 
         let binHz = config.sampleRate / Double(config.windowSize)
-        var peakPowerPerBar = [Float](repeating: 0, count: barCount)
+        let maxBin = magnitudes.count - 1
 
-        for bin in 1..<magnitudes.count {
-            let hz = Double(bin) * binHz
-            guard hz >= FrequencyAxis.minHz, hz <= FrequencyAxis.maxHz else { continue }
-            let position = FrequencyAxis.normalizedPosition(forHz: hz)
-            let barIndex = min(barCount - 1, Int(position * Double(barCount)))
-            peakPowerPerBar[barIndex] = max(peakPowerPerBar[barIndex], magnitudes[bin])
+        func nearestBin(toHz hz: Double) -> Int {
+            min(max(1, Int((hz / binHz).rounded())), maxBin)
         }
 
-        return peakPowerPerBar.map { MagnitudeScaling.normalized(power: $0 / safeFullScalePower) }
+        var powerPerBar = [Float](repeating: 0, count: barCount)
+        for barIndex in 0..<barCount {
+            let lowerHz = FrequencyAxis.hz(atNormalizedPosition: Double(barIndex) / Double(barCount))
+            let upperHz = FrequencyAxis.hz(atNormalizedPosition: Double(barIndex + 1) / Double(barCount))
+            let lowerBin = nearestBin(toHz: lowerHz)
+            let upperBin = nearestBin(toHz: upperHz)
+
+            if upperBin > lowerBin {
+                var peak: Float = 0
+                for bin in lowerBin...upperBin {
+                    peak = max(peak, magnitudes[bin])
+                }
+                powerPerBar[barIndex] = peak
+            } else {
+                // Bar is narrower than one FFT bin -- no bin's frequency
+                // falls strictly within its range, so fall back to the
+                // single nearest bin (at the bar's midpoint) instead of
+                // leaving it silent.
+                powerPerBar[barIndex] = magnitudes[nearestBin(toHz: (lowerHz + upperHz) / 2)]
+            }
+        }
+
+        return powerPerBar.map { MagnitudeScaling.normalized(power: $0 / safeFullScalePower) }
     }
 }
