@@ -44,12 +44,12 @@ final class AudioPipelineViewModel {
     /// Audio reports the device list changed.
     private(set) var availableInputDevices: [AudioDevice] = []
     /// The Input Device picker's current selection -- see
-    /// CaptureConnectionState for whether it's actually running.
+    /// DeviceConnectionState for whether it's actually running.
     private(set) var selectedInputDeviceID: String?
     /// Drives the disconnected indicator (ticket #4, ADR 0006): the active
     /// device disappearing transitions this to `.disconnected` rather than
     /// silently reassigning to a different device.
-    private(set) var connectionState: CaptureConnectionState = .stopped
+    private(set) var connectionState: DeviceConnectionState = .stopped
 
     var isCaptureActive: Bool {
         if case .running = connectionState { return true }
@@ -71,7 +71,7 @@ final class AudioPipelineViewModel {
     private let ringBuffer: AudioRingBuffer
     private let pipeline: AudioAnalysisPipeline
     private let captureEngine: MicrophoneCaptureEngine
-    private let deviceEnumerator = AudioDeviceEnumerator()
+    private let deviceEnumerator = AudioDeviceEnumerator(scope: .input)
     private var streamTask: Task<Void, Never>?
 
     /// Persists the tech's last explicit Input Device choice across
@@ -91,7 +91,7 @@ final class AudioPipelineViewModel {
     }
 
     /// Starts capturing and streaming analysis updates. Resolves which
-    /// input device to use (InputDeviceSelector) from the persisted last
+    /// input device to use (AudioDeviceSelector) from the persisted last
     /// explicit choice, falling back to the system default. Safe to call
     /// multiple times; a no-op once already running.
     func start() {
@@ -101,7 +101,7 @@ final class AudioPipelineViewModel {
         deviceEnumerator.startObserving()
         refreshAvailableDevices()
 
-        guard let deviceID = InputDeviceSelector.resolve(
+        guard let deviceID = AudioDeviceSelector.resolve(
             availableDevices: availableInputDevices,
             persistedDeviceID: UserDefaults.standard.string(forKey: Self.persistedDeviceIDDefaultsKey),
             systemDefaultDeviceID: deviceEnumerator.systemDefaultDeviceID()

@@ -14,11 +14,9 @@
 import Foundation
 
 struct SignalGeneratorCore<RNG: RandomNumberGenerator> {
-    /// Fixed test-tone frequency for v1 -- issue #9 only calls for a
-    /// waveform picker, on/off, and level, not a frequency control. ISO
-    /// Band / free Hz entry (per CLAUDE.md's Signal Generator bullet) is
-    /// out of scope for this ticket and can be layered on later without
-    /// changing this type's shape.
+    /// Default sine frequency before the tech picks an ISO Band or types a
+    /// custom Hz value (ticket #14, CONTEXT.md "ISO Band"). 1000Hz is also
+    /// itself a standard ISO Band center.
     static var defaultSineFrequency: Double { 1000 }
 
     private var sine: SineOscillator
@@ -37,6 +35,14 @@ struct SignalGeneratorCore<RNG: RandomNumberGenerator> {
         }
         white = WhiteNoiseGenerator(rng: whiteRNG)
         pink = PinkNoiseGenerator(rng: pinkRNG)
+    }
+
+    /// Updates the sine oscillator's frequency in place (ticket #14 -- ISO
+    /// Band stepping / free Hz entry). Preserves the oscillator's current
+    /// phase so changing frequency mid-tone doesn't produce an audible
+    /// click from a phase discontinuity.
+    mutating func setSineFrequency(_ frequency: Double) {
+        sine.frequency = frequency
     }
 
     /// Advances only the selected waveform's generator and returns its next

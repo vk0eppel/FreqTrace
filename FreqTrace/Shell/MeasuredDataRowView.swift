@@ -52,7 +52,7 @@ struct MeasuredDataRowView: View {
             Text("OFFSET")
                 .font(.system(size: Typography.subCaptionSize, weight: .regular))
                 .foregroundStyle(theme.textFaint)
-            DBValueField(
+            NumericValueField(
                 value: Binding(
                     get: { trackedFrequencyViewModel.splOffsetDb },
                     set: { trackedFrequencyViewModel.splOffsetDb = $0 }

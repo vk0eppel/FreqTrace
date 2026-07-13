@@ -23,6 +23,7 @@ final class SignalGeneratorRenderState: @unchecked Sendable {
     private struct Snapshot {
         var waveform: Waveform
         var amplitude: Double
+        var sineFrequency: Double
     }
 
     private var core: SignalGeneratorCore<SystemRandomNumberGenerator>
@@ -30,12 +31,17 @@ final class SignalGeneratorRenderState: @unchecked Sendable {
 
     init(sampleRate: Double) {
         core = SignalGeneratorCore(sampleRate: sampleRate)
-        snapshot = OSAllocatedUnfairLock(initialState: Snapshot(waveform: .sine, amplitude: 0))
+        snapshot = OSAllocatedUnfairLock(initialState: Snapshot(
+            waveform: .sine,
+            amplitude: 0,
+            sineFrequency: SignalGeneratorCore<SystemRandomNumberGenerator>.defaultSineFrequency
+        ))
     }
 
-    /// Called from the main actor whenever the waveform or level changes.
-    func update(waveform: Waveform, amplitude: Double) {
-        snapshot.withLock { $0 = Snapshot(waveform: waveform, amplitude: amplitude) }
+    /// Called from the main actor whenever the waveform, level, or sine
+    /// frequency (ticket #14) changes.
+    func update(waveform: Waveform, amplitude: Double, sineFrequency: Double) {
+        snapshot.withLock { $0 = Snapshot(waveform: waveform, amplitude: amplitude, sineFrequency: sineFrequency) }
     }
 
     /// The AVAudioSourceNode render block. Runs on the real-time audio
@@ -49,6 +55,9 @@ final class SignalGeneratorRenderState: @unchecked Sendable {
     ) -> OSStatus {
         let current = snapshot.withLock { $0 }
         isSilence.pointee = ObjCBool(current.amplitude == 0)
+        if current.waveform == .sine {
+            core.setSineFrequency(current.sineFrequency)
+        }
 
         let buffers = UnsafeMutableAudioBufferListPointer(audioBufferList)
         for frame in 0..<Int(frameCount) {

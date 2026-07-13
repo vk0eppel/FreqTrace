@@ -4,11 +4,12 @@
 //
 //  Two-line Controls row (see CLAUDE.md Frontend):
 //  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak/Freeze/Stop,
-//  Signal Generator (live, ticket #9). SPL Offset lives in the Measured
-//  Data row's SPL block instead (ticket #6), alongside the reading it
-//  offsets, not here. Line 2 -- Input Device (live, ticket #4), Appearance
-//  Mode (center), Output Device (right). Remaining groups are still
-//  placeholders pending their own tickets.
+//  Signal Generator (live, ticket #9, sine frequency control added ticket
+//  #14). SPL Offset lives in the Measured Data row's SPL block instead
+//  (ticket #6), alongside the reading it offsets, not here. Line 2 --
+//  Input Device (live, ticket #4), Appearance Mode (center), Output Device
+//  (live, ticket #14). Remaining groups are still placeholders pending
+//  their own tickets.
 //
 
 import SwiftUI
@@ -49,7 +50,7 @@ struct ControlsRowView: View {
         HStack(spacing: 0) {
             inputDeviceControl
                 .frame(maxWidth: .infinity, alignment: .leading)
-            placeholderGroup("Output Device")
+            outputDeviceControl
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
         .overlay {
@@ -97,6 +98,49 @@ struct ControlsRowView: View {
         guard let id = trackedFrequencyViewModel.selectedInputDeviceID,
               let device = trackedFrequencyViewModel.availableInputDevices.first(where: { $0.id == id }) else {
             return "No Input Device"
+        }
+        return device.name
+    }
+
+    // The Output Device control (ticket #14, CONTEXT.md "Output Device"):
+    // same shape as the Input Device control above, but for the Signal
+    // Generator's own AVAudioEngine/device selection -- independent of the
+    // Input Device picker (own AudioDeviceEnumerator scope, own
+    // AudioDeviceSelector resolution, own persisted choice). Same
+    // disconnect behavior (ADR 0006): the disconnected indicator appears
+    // rather than silently falling back to another output.
+    private var outputDeviceControl: some View {
+        HStack(spacing: 6) {
+            if case .disconnected = signalGenerator.connectionState {
+                Text("DISCONNECTED")
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(theme.danger)
+            }
+
+            Menu {
+                ForEach(signalGenerator.availableOutputDevices) { device in
+                    Button(device.name) {
+                        signalGenerator.selectOutputDevice(id: device.id)
+                    }
+                }
+            } label: {
+                Text(selectedOutputDeviceName)
+                    .font(.system(size: Typography.controlSize, weight: .medium))
+                    .lineLimit(1)
+            }
+            .fixedSize()
+
+            Text("OUTPUT")
+                .font(.system(size: Typography.controlSize, weight: .medium))
+                .foregroundStyle(theme.textDim)
+        }
+        .padding(.horizontal, 18)
+    }
+
+    private var selectedOutputDeviceName: String {
+        guard let id = signalGenerator.selectedOutputDeviceID,
+              let device = signalGenerator.availableOutputDevices.first(where: { $0.id == id }) else {
+            return "No Output Device"
         }
         return device.name
     }

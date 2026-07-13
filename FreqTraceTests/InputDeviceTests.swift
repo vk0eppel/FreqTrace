@@ -2,24 +2,28 @@
 //  InputDeviceTests.swift
 //  FreqTraceTests
 //
-//  Exercises the pure decision logic behind Input Device selection (ticket
-//  #4, CONTEXT.md "Input Device"): InputDeviceSelector.resolve picks which
-//  device should be active from (available devices, persisted last explicit
-//  choice, system default), independent of real Core Audio hardware -- see
+//  Exercises the pure decision logic behind Input/Output Device selection
+//  (ticket #4 for Input, ticket #14 for Output; CONTEXT.md "Input Device" /
+//  "Output Device"): AudioDeviceSelector.resolve picks which device should
+//  be active from (available devices, persisted last explicit choice,
+//  system default), independent of real Core Audio hardware -- see
 //  MicrophoneCaptureEngine.swift for why the hardware glue itself is not
-//  unit-tested here.
+//  unit-tested here. Originally InputDeviceSelectorTests/InputDeviceSelector
+//  before ticket #14 generalized the type for reuse by Output Device; kept
+//  this file's name since it still reads fine covering the shared
+//  DeviceConnectionState machine too.
 //
 
 import Testing
 @testable import FreqTrace
 
-struct InputDeviceSelectorTests {
+struct AudioDeviceSelectorTests {
 
     private let mic = AudioDevice(id: "built-in-mic", name: "MacBook Pro Microphone")
     private let usb = AudioDevice(id: "usb-interface", name: "Scarlett 2i2")
 
     @Test func firstLaunchWithNoPersistedChoiceUsesSystemDefault() {
-        let resolved = InputDeviceSelector.resolve(
+        let resolved = AudioDeviceSelector.resolve(
             availableDevices: [mic, usb],
             persistedDeviceID: nil,
             systemDefaultDeviceID: usb.id
@@ -29,7 +33,7 @@ struct InputDeviceSelectorTests {
     }
 
     @Test func persistedChoiceStillAvailableWinsOverSystemDefault() {
-        let resolved = InputDeviceSelector.resolve(
+        let resolved = AudioDeviceSelector.resolve(
             availableDevices: [mic, usb],
             persistedDeviceID: mic.id,
             systemDefaultDeviceID: usb.id
@@ -39,7 +43,7 @@ struct InputDeviceSelectorTests {
     }
 
     @Test func persistedChoiceNoLongerAvailableFallsBackToSystemDefault() {
-        let resolved = InputDeviceSelector.resolve(
+        let resolved = AudioDeviceSelector.resolve(
             availableDevices: [usb],
             persistedDeviceID: mic.id,
             systemDefaultDeviceID: usb.id
@@ -49,7 +53,7 @@ struct InputDeviceSelectorTests {
     }
 
     @Test func nothingAvailableResolvesToNil() {
-        let resolved = InputDeviceSelector.resolve(
+        let resolved = AudioDeviceSelector.resolve(
             availableDevices: [],
             persistedDeviceID: mic.id,
             systemDefaultDeviceID: usb.id
@@ -63,10 +67,10 @@ struct InputDeviceSelectorTests {
 // indicator (ticket #4, ADR 0006): the active device disappearing from the
 // available set must transition to `.disconnected`, never silently
 // reassign to a different device.
-struct CaptureConnectionStateTests {
+struct DeviceConnectionStateTests {
 
     @Test func activeDeviceDisappearingTransitionsToDisconnected() {
-        let state = CaptureConnectionState.running(deviceID: "usb-interface")
+        let state = DeviceConnectionState.running(deviceID: "usb-interface")
 
         let next = state.handlingDeviceListChange(availableDeviceIDs: ["built-in-mic"])
 
@@ -74,7 +78,7 @@ struct CaptureConnectionStateTests {
     }
 
     @Test func activeDeviceStillPresentStaysRunning() {
-        let state = CaptureConnectionState.running(deviceID: "usb-interface")
+        let state = DeviceConnectionState.running(deviceID: "usb-interface")
 
         let next = state.handlingDeviceListChange(availableDeviceIDs: ["usb-interface", "built-in-mic"])
 
@@ -82,7 +86,7 @@ struct CaptureConnectionStateTests {
     }
 
     @Test func stoppedIsUnaffectedByDeviceListChanges() {
-        let state = CaptureConnectionState.stopped
+        let state = DeviceConnectionState.stopped
 
         let next = state.handlingDeviceListChange(availableDeviceIDs: [])
 
@@ -90,7 +94,7 @@ struct CaptureConnectionStateTests {
     }
 
     @Test func selectingADeviceAlwaysTransitionsToRunning() {
-        let disconnected = CaptureConnectionState.disconnected(deviceID: "usb-interface")
+        let disconnected = DeviceConnectionState.disconnected(deviceID: "usb-interface")
 
         let next = disconnected.selecting(deviceID: "built-in-mic")
 
@@ -98,7 +102,7 @@ struct CaptureConnectionStateTests {
     }
 
     @Test func stoppingAlwaysTransitionsToStopped() {
-        let running = CaptureConnectionState.running(deviceID: "usb-interface")
+        let running = DeviceConnectionState.running(deviceID: "usb-interface")
 
         #expect(running.stopping() == .stopped)
     }
@@ -106,7 +110,7 @@ struct CaptureConnectionStateTests {
     @Test func disconnectedDeviceReappearingTransitionsBackToRunning() {
         // AC: "Reconnecting ... resumes capture" -- distinct from the
         // manual-reselection AC covered by selectingADeviceAlwaysTransitionsToRunning.
-        let state = CaptureConnectionState.disconnected(deviceID: "usb-interface")
+        let state = DeviceConnectionState.disconnected(deviceID: "usb-interface")
 
         let next = state.handlingDeviceListChange(availableDeviceIDs: ["usb-interface"])
 
@@ -114,7 +118,7 @@ struct CaptureConnectionStateTests {
     }
 
     @Test func disconnectedDeviceStillMissingStaysDisconnected() {
-        let state = CaptureConnectionState.disconnected(deviceID: "usb-interface")
+        let state = DeviceConnectionState.disconnected(deviceID: "usb-interface")
 
         let next = state.handlingDeviceListChange(availableDeviceIDs: ["built-in-mic"])
 
