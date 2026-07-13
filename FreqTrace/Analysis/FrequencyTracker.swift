@@ -55,6 +55,53 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     /// or `nil` if fewer than `config.windowSize` samples were supplied. Only
     /// the most recent `config.windowSize` samples are analyzed.
     func trackedFrequency(in samples: [Float], weighting: Weighting) -> Double? {
+        guard let magnitudes = computeMagnitudes(in: samples) else { return nil }
+        return trackedFrequency(fromMagnitudes: magnitudes, weighting: weighting)
+    }
+
+    /// Returns the raw, unweighted power magnitude spectrum (length
+    /// `config.windowSize / 2`, one entry per FFT bin) for `samples`, or
+    /// `nil` if fewer than `config.windowSize` samples were supplied. This
+    /// is the seam the waterfall (see WaterfallHistoryBuffer) consumes --
+    /// deliberately unweighted, since Weighting only applies to Tracked
+    /// Frequency / SPL (CONTEXT.md "Weighting"), not the true measured
+    /// spectrum a spectrogram displays.
+    func spectrum(in samples: [Float]) -> [Float]? {
+        computeMagnitudes(in: samples)
+    }
+
+    /// Weighted argmax over an already-computed magnitude spectrum. Lets a
+    /// caller needing both Tracked Frequency and the raw spectrum from the
+    /// same samples (see AudioAnalysisPipeline) run the FFT once via
+    /// spectrum(in:) and derive both from it, rather than running the FFT
+    /// twice per hop.
+    func trackedFrequency(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Double? {
+        let binHz = config.sampleRate / Double(config.windowSize)
+        let nyquist = config.sampleRate / 2
+
+        var bestBin = -1
+        var bestWeightedMagnitude: Float = -Float.greatestFiniteMagnitude
+        // Bin 0 is DC (no meaningful frequency) -- skip it.
+        for bin in 1..<magnitudes.count {
+            let frequency = Double(bin) * binHz
+            guard frequency <= nyquist else { break }
+            let gainDb = weighting.gainDb(at: frequency)
+            // magnitudes[] from vDSP_zvmags is power (amplitude^2), so the
+            // weighting gain (an amplitude-domain dB value) is applied
+            // twice in the dB->linear conversion to stay in power terms.
+            let gainLinearPower = Float(pow(10, gainDb / 10))
+            let weighted = magnitudes[bin] * gainLinearPower
+            if weighted > bestWeightedMagnitude {
+                bestWeightedMagnitude = weighted
+                bestBin = bin
+            }
+        }
+
+        guard bestBin > 0 else { return nil }
+        return Double(bestBin) * binHz
+    }
+
+    private func computeMagnitudes(in samples: [Float]) -> [Float]? {
         let n = config.windowSize
         guard samples.count >= n else { return nil }
         let windowStart = samples.count - n
@@ -82,28 +129,6 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
             }
         }
 
-        let binHz = config.sampleRate / Double(n)
-        let nyquist = config.sampleRate / 2
-
-        var bestBin = -1
-        var bestWeightedMagnitude: Float = -Float.greatestFiniteMagnitude
-        // Bin 0 is DC (no meaningful frequency) -- skip it.
-        for bin in 1..<halfN {
-            let frequency = Double(bin) * binHz
-            guard frequency <= nyquist else { break }
-            let gainDb = weighting.gainDb(at: frequency)
-            // magnitudes[] from vDSP_zvmags is power (amplitude^2), so the
-            // weighting gain (an amplitude-domain dB value) is applied
-            // twice in the dB->linear conversion to stay in power terms.
-            let gainLinearPower = Float(pow(10, gainDb / 10))
-            let weighted = magnitudes[bin] * gainLinearPower
-            if weighted > bestWeightedMagnitude {
-                bestWeightedMagnitude = weighted
-                bestBin = bin
-            }
-        }
-
-        guard bestBin > 0 else { return nil }
-        return Double(bestBin) * binHz
+        return magnitudes
     }
 }

@@ -80,6 +80,70 @@ struct FrequencyTrackerTests {
         #expect(abs(cResult - 50) <= binResolutionHz)
         #expect(abs(aResult - 1000) <= binResolutionHz)
     }
+
+    // spectrum() is the seam the waterfall (ticket #8) consumes: the raw,
+    // unweighted power magnitude per FFT bin, reusing the same FFT the
+    // Tracked Frequency computation runs (see AudioAnalysisPipeline, which
+    // calls this once per hop rather than running the FFT twice).
+
+    @Test func spectrumReturnsNilWhenFewerThanWindowSizeSamplesAreProvided() {
+        let tracker = FrequencyTracker(config: config)
+        let tooShort = [Float](repeating: 0, count: config.windowSize - 1)
+
+        #expect(tracker.spectrum(in: tooShort) == nil)
+    }
+
+    @Test func spectrumHasHalfTheWindowSizeInBins() throws {
+        let tracker = FrequencyTracker(config: config)
+        let samples = sineWave(frequency: 1000, sampleRate: config.sampleRate, count: config.windowSize)
+
+        let magnitudes = try #require(tracker.spectrum(in: samples))
+
+        #expect(magnitudes.count == config.windowSize / 2)
+    }
+
+    @Test func spectrumPeaksAtTheTonesBin() throws {
+        let tracker = FrequencyTracker(config: config)
+        let samples = sineWave(frequency: 1000, sampleRate: config.sampleRate, count: config.windowSize)
+
+        let magnitudes = try #require(tracker.spectrum(in: samples))
+        let peakBin = magnitudes.indices.max(by: { magnitudes[$0] < magnitudes[$1] })!
+        let peakFrequency = Double(peakBin) * binResolutionHz
+
+        #expect(abs(peakFrequency - 1000) <= binResolutionHz)
+    }
+
+    @Test func spectrumIsUnweighted() throws {
+        // Unlike trackedFrequency, spectrum() must not apply Weighting --
+        // the waterfall shows true measured magnitude, not a
+        // perceptually-biased view (Weighting only applies to Tracked
+        // Frequency / SPL per CONTEXT.md "Weighting").
+        let tracker = FrequencyTracker(config: config)
+        let low = sineWave(frequency: 50, amplitude: 1.0, sampleRate: config.sampleRate, count: config.windowSize)
+        let mid = sineWave(frequency: 1000, amplitude: 0.1, sampleRate: config.sampleRate, count: config.windowSize)
+        let mixed = zip(low, mid).map(+)
+
+        let magnitudes = try #require(tracker.spectrum(in: mixed))
+        let peakBin = magnitudes.indices.max(by: { magnitudes[$0] < magnitudes[$1] })!
+        let peakFrequency = Double(peakBin) * binResolutionHz
+
+        // A-weighting would have made the 1kHz tone win (see
+        // weightingChangesTheWinnerForADisagreeingTwoToneSignal above); the
+        // raw spectrum must still show the physically louder 50Hz tone.
+        #expect(abs(peakFrequency - 50) <= binResolutionHz)
+    }
+
+    @Test func louderToneProducesLargerMagnitudeAtItsBin() throws {
+        let tracker = FrequencyTracker(config: config)
+        let quiet = sineWave(frequency: 1000, amplitude: 0.2, sampleRate: config.sampleRate, count: config.windowSize)
+        let loud = sineWave(frequency: 1000, amplitude: 0.8, sampleRate: config.sampleRate, count: config.windowSize)
+
+        let quietMagnitudes = try #require(tracker.spectrum(in: quiet))
+        let loudMagnitudes = try #require(tracker.spectrum(in: loud))
+        let bin = Int((1000 / binResolutionHz).rounded())
+
+        #expect(loudMagnitudes[bin] > quietMagnitudes[bin])
+    }
 }
 
 struct WeightingTests {

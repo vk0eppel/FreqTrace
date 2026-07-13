@@ -12,6 +12,10 @@ import Foundation
 
 struct AnalysisResult: Sendable {
     let trackedFrequencyHz: Double
+    /// Raw, unweighted power magnitude per FFT bin (length config.windowSize
+    /// / 2) -- the waterfall's per-frame row (see WaterfallHistoryBuffer).
+    /// Deliberately unweighted; see FrequencyTracker.spectrum(in:).
+    let magnitudes: [Float]
     let timestamp: Date
 }
 
@@ -73,8 +77,12 @@ actor AudioAnalysisPipeline {
             rollingWindow.removeFirst(config.hopSize)
             rollingWindow.append(contentsOf: hopBuffer)
 
-            if let frequency = tracker.trackedFrequency(in: rollingWindow, weighting: weighting) {
-                continuation.yield(AnalysisResult(trackedFrequencyHz: frequency, timestamp: Date()))
+            // Run the FFT once per hop and derive both outputs from it,
+            // rather than calling trackedFrequency(in:weighting:) and
+            // spectrum(in:) separately (each would redo the same FFT).
+            if let magnitudes = tracker.spectrum(in: rollingWindow),
+               let frequency = tracker.trackedFrequency(fromMagnitudes: magnitudes, weighting: weighting) {
+                continuation.yield(AnalysisResult(trackedFrequencyHz: frequency, magnitudes: magnitudes, timestamp: Date()))
             }
         }
         continuation.finish()

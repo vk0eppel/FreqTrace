@@ -13,7 +13,7 @@ import SwiftUI
 
 struct ControlsRowView: View {
     @Environment(\.theme) private var theme
-    @Environment(TrackedFrequencyViewModel.self) private var trackedFrequencyViewModel
+    @Environment(AudioPipelineViewModel.self) private var trackedFrequencyViewModel
     @State private var signalGenerator = SignalGeneratorEngine()
 
     var body: some View {
@@ -97,6 +97,6 @@ struct ControlsRowView: View {
 #Preview {
     ControlsRowView()
         .environment(\.theme, Theme(mode: .dark))
-        .environment(TrackedFrequencyViewModel())
+        .environment(AudioPipelineViewModel())
         .frame(width: 1120)
 }

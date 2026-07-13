@@ -31,6 +31,7 @@ Target user: live sound techs at FOH during soundcheck/show — not measurement 
 - Default scroll history: ~10–20s, long enough to catch a feedback ring building.
 - Scroll direction: new data enters at the **bottom**, scrolls **up** — "now" is the bottom edge, history ages upward off the top.
 - **Time axis**: explicit labeled gridlines (e.g. every 5s: -5s, -10s, -15s...), same visual treatment as the frequency axis labels — a tech needs a real time reference to judge how long something's been sustaining, not just eyeballed scroll position.
+- **Implementation** (ticket #8): the GPU texture stores raw linear FFT bins (R32Float, one row per hop); the log-frequency remap and magnitude→color mapping both happen per-pixel in the fragment shader (`Waterfall.metal`), not precomputed on the CPU — resampling ~2000 columns × ~350 rows per frame on the CPU would be far more expensive than doing it once per screen pixel on the GPU. Scrolling uses a repeat-addressing sampler on the texture's time axis rather than CPU-side row copying. **Known follow-up**: `MagnitudeScaling`'s -80dB/0dB floor/ceiling was a reasonable first guess, not calibrated against real-world noise floors — initial hardware testing shows the display skewing toward the loud end of the ramp; may need retuning once used in a real room.
 
 ### Most valuable feature — Tracked Frequency + Anomaly Candidate detection
 

@@ -1,0 +1,41 @@
+//
+//  MetalWaterfallView.swift
+//  FreqTrace
+//
+//  NSViewRepresentable wrapping the MTKView that renders the waterfall
+//  (ticket #8, ADR 0004). Renders continuously at a modest fixed frame
+//  rate independent of the pipeline's own ~23Hz hop cadence -- new data
+//  just gets picked up by whichever draw call comes next, decoupling
+//  "how often SwiftUI observes a change" from "how smooth the animation
+//  looks" (see the ticket's "sustains a smooth frame rate" criterion).
+//
+
+import MetalKit
+import SwiftUI
+
+struct MetalWaterfallView: NSViewRepresentable {
+    let magnitudes: [Float]
+    let config: AnalysisConfig
+
+    func makeCoordinator() -> WaterfallRenderer? {
+        guard let device = MTLCreateSystemDefaultDevice() else { return nil }
+        return WaterfallRenderer(device: device, config: config)
+    }
+
+    func makeNSView(context: Context) -> MTKView {
+        let view = MTKView()
+        view.device = MTLCreateSystemDefaultDevice()
+        view.delegate = context.coordinator
+        view.colorPixelFormat = .bgra8Unorm
+        view.clearColor = MTLClearColorMake(0, 0, 0, 1)
+        view.preferredFramesPerSecond = 30
+        view.isPaused = false
+        view.enableSetNeedsDisplay = false
+        return view
+    }
+
+    func updateNSView(_ nsView: MTKView, context: Context) {
+        guard !magnitudes.isEmpty else { return }
+        context.coordinator?.pushMagnitudes(magnitudes)
+    }
+}

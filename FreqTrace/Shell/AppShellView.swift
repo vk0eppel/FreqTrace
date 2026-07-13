@@ -11,7 +11,7 @@ import SwiftUI
 
 struct AppShellView: View {
     @Environment(\.theme) private var theme
-    @State private var trackedFrequencyViewModel = TrackedFrequencyViewModel()
+    @State private var trackedFrequencyViewModel = AudioPipelineViewModel()
 
     var body: some View {
         VStack(spacing: 0) {

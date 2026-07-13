@@ -7,25 +7,17 @@
 //  The environment seam exists now so the future Appearance Mode toggle
 //  ticket only has to change what's written here, not every consuming view.
 //
+//  Hex parsing itself lives in HexColor (a plain SIMD3<Float>, no SwiftUI
+//  dependency) so the waterfall's color ramp can share it without pulling
+//  in SwiftUI.
+//
 
 import SwiftUI
 
 extension Color {
     init(hex: String) {
-        var sanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        sanitized.removeAll { $0 == "#" }
-        var value: UInt64 = 0
-        // A malformed design token is a build-time bug, not a runtime
-        // condition to degrade gracefully from -- fail loudly rather than
-        // silently rendering black.
-        precondition(
-            sanitized.count == 6 && Scanner(string: sanitized).scanHexInt64(&value),
-            "Invalid hex color token: \"\(hex)\""
-        )
-        let r = Double((value >> 16) & 0xFF) / 255
-        let g = Double((value >> 8) & 0xFF) / 255
-        let b = Double(value & 0xFF) / 255
-        self.init(red: r, green: g, blue: b)
+        let rgb = HexColor.rgb(hex)
+        self.init(red: Double(rgb.x), green: Double(rgb.y), blue: Double(rgb.z))
     }
 }
 

@@ -3,7 +3,7 @@
 //  FreqTrace
 //
 //  The Measured Data row: Tracked Frequency (hero, live-wired to
-//  TrackedFrequencyViewModel per ticket #3), Anomaly Candidates, SPL.
+//  AudioPipelineViewModel per ticket #3), Anomaly Candidates, SPL.
 //  Read-only, no controls (see CLAUDE.md Frontend). Anomaly Candidates/SPL
 //  are still placeholders pending their own tickets.
 //
@@ -12,7 +12,7 @@ import SwiftUI
 
 struct MeasuredDataRowView: View {
     @Environment(\.theme) private var theme
-    @Environment(TrackedFrequencyViewModel.self) private var trackedFrequencyViewModel
+    @Environment(AudioPipelineViewModel.self) private var trackedFrequencyViewModel
 
     var body: some View {
         HStack(spacing: 0) {
@@ -67,6 +67,6 @@ struct MeasuredDataRowView: View {
 #Preview {
     MeasuredDataRowView()
         .environment(\.theme, Theme(mode: .dark))
-        .environment(TrackedFrequencyViewModel())
+        .environment(AudioPipelineViewModel())
         .frame(width: 1120)
 }
