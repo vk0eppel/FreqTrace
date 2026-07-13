@@ -329,11 +329,13 @@ final class AudioPipelineViewModel {
         anomalyCandidates = []
     }
 
-    /// "2.34 kHz"-style formatting for the Measured Data row's hero number,
+    /// "2340 Hz"-style formatting for the Measured Data row's hero number,
     /// or an em dash placeholder before capture produces a first result.
+    /// Whole Hz, not fractional -- finer than the FFT's own bin resolution
+    /// (~12Hz at the default config) would be false precision.
     var formattedFrequency: String {
         guard let hz = trackedFrequencyHz else { return "\u{2014}" }
-        return String(format: "%.2f kHz", hz / 1000)
+        return String(format: "%.0f Hz", hz)
     }
 
     /// "86 dB"-style formatting for the SPL block, including the manual
