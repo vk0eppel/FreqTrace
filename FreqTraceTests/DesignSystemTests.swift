@@ -18,6 +18,9 @@ struct DesignTokensTests {
         #expect(dark.accent == "#ffb84d")
         #expect(dark.danger == "#ff5a5a")
         #expect(dark.warn == "#ffcf5c")
+        #expect(dark.border == "#262b31")
+        #expect(dark.borderSoft == "#1e2227")
+        #expect(dark.surfaceRaised == "#1b1f24")
     }
 
     @Test func lightTokensMatchSpec() {
@@ -29,6 +32,9 @@ struct DesignTokensTests {
         #expect(light.accent == "#8f4d00")
         #expect(light.danger == "#c62f2f")
         #expect(light.warn == "#6e4e00")
+        #expect(light.border == "#d7dbdf")
+        #expect(light.borderSoft == "#e3e6e9")
+        #expect(light.surfaceRaised == "#f7f8f9")
     }
 
     @Test func lightModeIsNotANaiveInversionOfDark() {

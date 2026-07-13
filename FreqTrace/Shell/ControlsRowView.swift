@@ -38,12 +38,18 @@ struct ControlsRowView: View {
     }
 
     private var line2: some View {
+        // True three-way split (not a double-Spacer, which only centers
+        // "Appearance" when the left/right content happen to be equal
+        // width) -- side groups get equal flexible width via .frame, and
+        // "Appearance" is centered as an overlay independent of their content.
         HStack(spacing: 0) {
             placeholderGroup("Input Device")
-            Spacer(minLength: 0)
-            placeholderGroup("Appearance")
-            Spacer(minLength: 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
             placeholderGroup("Output Device")
+                .frame(maxWidth: .infinity, alignment: .trailing)
+        }
+        .overlay {
+            placeholderGroup("Appearance")
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)

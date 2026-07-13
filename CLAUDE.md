@@ -106,8 +106,11 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
   | accent | `#ffb84d` | `#8f4d00` (was `#c9770a`, 3.0:1 — fixed to 6.5:1) |
   | danger | `#ff5a5a` | `#c62f2f` |
   | warn | `#ffcf5c` | `#6e4e00` (was `#a8790a`, 3.89:1 — fixed to 7.63:1) |
+  | border | `#262b31` | `#d7dbdf` |
+  | border-soft | `#1e2227` | `#e3e6e9` |
+  | surface-raised | `#1b1f24` | `#f7f8f9` |
 
-  Full token set (borders, surface-raised, annotation colors — review-only, not product UI) lives in the wireframe artifact's `:root`/`:root[data-theme="light"]` blocks.
+  `border`/`border-soft`/`surface-raised` were originally scoped as review-only wireframe tokens, but building the real app shell (ticket #2) surfaced that product UI genuinely needs them (panel backgrounds, dividers between zones) — promoted to real product tokens rather than shipping a shell with no visual separation. Annotation colors (used only for design-review callouts in the wireframe) remain review-only and are not implemented in the app.
 - **Freeze vs. Stop**: two distinct controls, not one. Freeze pauses the display only (pipeline keeps running; instant catch-up on unfreeze) — for quick glances mid-show. Stop halts the AVAudioEngine capture pipeline itself — for actually being done measuring (breaks, between soundcheck and doors). See CONTEXT.md.
 - **Input Device**: picker in the Controls row. Defaults to system default on first launch, remembers last explicit choice after. On disconnect: pipeline enters Stopped state with an explicit disconnected indicator, no silent auto-fallback (ADR 0006).
 - **Window**: freely resizable, with an enforced minimum size. No fixed/locked aspect ratio. No special fullscreen/presentation/multi-display handling for v1 — standard macOS window management (native fullscreen, drag to a second monitor) is sufficient.

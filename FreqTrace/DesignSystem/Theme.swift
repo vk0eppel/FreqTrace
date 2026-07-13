@@ -12,10 +12,16 @@ import SwiftUI
 
 extension Color {
     init(hex: String) {
-        var s = hex.trimmingCharacters(in: .whitespacesAndNewlines)
-        s.removeAll { $0 == "#" }
+        var sanitized = hex.trimmingCharacters(in: .whitespacesAndNewlines)
+        sanitized.removeAll { $0 == "#" }
         var value: UInt64 = 0
-        Scanner(string: s).scanHexInt64(&value)
+        // A malformed design token is a build-time bug, not a runtime
+        // condition to degrade gracefully from -- fail loudly rather than
+        // silently rendering black.
+        precondition(
+            sanitized.count == 6 && Scanner(string: sanitized).scanHexInt64(&value),
+            "Invalid hex color token: \"\(hex)\""
+        )
         let r = Double((value >> 16) & 0xFF) / 255
         let g = Double((value >> 8) & 0xFF) / 255
         let b = Double(value & 0xFF) / 255
