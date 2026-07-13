@@ -2,55 +2,28 @@
 //  AudioDeviceEnumerator.swift
 //  FreqTrace
 //
-//  Core Audio device listing for the Input/Output Device pickers (ticket
-//  #4, CONTEXT.md "Input Device" / "Output Device"). Lists devices that
-//  expose the given scope's streams (input or output), reports the system
-//  default, and notifies on any change to the device list or default so the
-//  UI can react to hardware being plugged/unplugged. Not unit-testable in
-//  this environment (no real audio hardware in CI/sandbox) -- see
-//  InputDeviceTests.swift for the pure decision logic this feeds.
+//  Core Audio device listing for the Input Device picker (ticket #4,
+//  CONTEXT.md "Input Device"). Lists devices that expose an input stream,
+//  reports the system default input, and notifies on any change to the
+//  device list or default so the UI can react to hardware being
+//  plugged/unplugged. Not unit-testable in this environment (no real audio
+//  hardware in CI/sandbox) -- see InputDeviceTests.swift for the pure
+//  decision logic this feeds.
+//
+//  Input-only for now: Output Device (CONTEXT.md "Output Device") has "the
+//  same shape" per CONTEXT.md, but belongs to its own ticket (#14) -- no
+//  point generalizing this before that ticket needs it.
 //
 
 import CoreAudio
 import Foundation
 
-enum AudioDeviceScope {
-    case input
-    case output
-
-    fileprivate var streamsSelector: AudioObjectPropertySelector {
-        switch self {
-        case .input: kAudioDevicePropertyStreams
-        case .output: kAudioDevicePropertyStreams
-        }
-    }
-
-    fileprivate var streamsScope: AudioObjectPropertyScope {
-        switch self {
-        case .input: kAudioObjectPropertyScopeInput
-        case .output: kAudioObjectPropertyScopeOutput
-        }
-    }
-
-    fileprivate var defaultDeviceSelector: AudioObjectPropertySelector {
-        switch self {
-        case .input: kAudioHardwarePropertyDefaultInputDevice
-        case .output: kAudioHardwarePropertyDefaultOutputDevice
-        }
-    }
-}
-
 @MainActor
 final class AudioDeviceEnumerator {
-    private let scope: AudioDeviceScope
     private var listenerBlock: AudioObjectPropertyListenerBlock?
 
     /// Called whenever the available device list or system default changes.
     var onChange: (() -> Void)?
-
-    init(scope: AudioDeviceScope) {
-        self.scope = scope
-    }
 
     deinit {
         // Listener teardown intentionally omitted: this type is owned for
@@ -58,22 +31,22 @@ final class AudioDeviceEnumerator {
         // point at which a live listener needs removing before process exit.
     }
 
-    /// All devices exposing at least one stream in `scope`.
+    /// All devices exposing at least one input stream.
     func availableDevices() -> [AudioDevice] {
         allDeviceIDs().compactMap { deviceID in
-            guard hasStreams(deviceID: deviceID, scope: scope) else { return nil }
+            guard hasInputStreams(deviceID: deviceID) else { return nil }
             guard let uid = stringProperty(deviceID: deviceID, selector: kAudioDevicePropertyDeviceUID) else { return nil }
             let name = stringProperty(deviceID: deviceID, selector: kAudioObjectPropertyName) ?? uid
             return AudioDevice(id: uid, name: name)
         }
     }
 
-    /// The system default device's UID for `scope`, if any.
+    /// The system default input device's UID, if any.
     func systemDefaultDeviceID() -> String? {
         var deviceID = AudioDeviceID(0)
         var size = UInt32(MemoryLayout<AudioDeviceID>.size)
         var address = AudioObjectPropertyAddress(
-            mSelector: scope.defaultDeviceSelector,
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
             mElement: kAudioObjectPropertyElementMain
         )
@@ -116,7 +89,7 @@ final class AudioDeviceEnumerator {
         }
         listenerBlock = block
 
-        for selector in [kAudioHardwarePropertyDevices, scope.defaultDeviceSelector] {
+        for selector in [kAudioHardwarePropertyDevices, kAudioHardwarePropertyDefaultInputDevice] {
             var address = AudioObjectPropertyAddress(
                 mSelector: selector,
                 mScope: kAudioObjectPropertyScopeGlobal,
@@ -144,10 +117,10 @@ final class AudioDeviceEnumerator {
         return deviceIDs
     }
 
-    private func hasStreams(deviceID: AudioDeviceID, scope: AudioDeviceScope) -> Bool {
+    private func hasInputStreams(deviceID: AudioDeviceID) -> Bool {
         var address = AudioObjectPropertyAddress(
-            mSelector: scope.streamsSelector,
-            mScope: scope.streamsScope,
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: kAudioObjectPropertyScopeInput,
             mElement: kAudioObjectPropertyElementMain
         )
         var size: UInt32 = 0

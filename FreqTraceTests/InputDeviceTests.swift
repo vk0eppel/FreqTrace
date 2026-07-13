@@ -102,4 +102,22 @@ struct CaptureConnectionStateTests {
 
         #expect(running.stopping() == .stopped)
     }
+
+    @Test func disconnectedDeviceReappearingTransitionsBackToRunning() {
+        // AC: "Reconnecting ... resumes capture" -- distinct from the
+        // manual-reselection AC covered by selectingADeviceAlwaysTransitionsToRunning.
+        let state = CaptureConnectionState.disconnected(deviceID: "usb-interface")
+
+        let next = state.handlingDeviceListChange(availableDeviceIDs: ["usb-interface"])
+
+        #expect(next == .running(deviceID: "usb-interface"))
+    }
+
+    @Test func disconnectedDeviceStillMissingStaysDisconnected() {
+        let state = CaptureConnectionState.disconnected(deviceID: "usb-interface")
+
+        let next = state.handlingDeviceListChange(availableDeviceIDs: ["built-in-mic"])
+
+        #expect(next == .disconnected(deviceID: "usb-interface"))
+    }
 }

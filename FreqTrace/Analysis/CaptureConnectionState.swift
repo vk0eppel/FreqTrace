@@ -13,15 +13,21 @@ enum CaptureConnectionState: Equatable, Sendable {
     case running(deviceID: String)
     case disconnected(deviceID: String)
 
-    /// Applies a change in the set of currently available device IDs. Only
-    /// `.running` is affected: if its device is no longer present, it
-    /// becomes `.disconnected` -- `.stopped` and `.disconnected` are
-    /// unaffected since there's no active device to lose.
+    /// Applies a change in the set of currently available device IDs.
+    /// `.running` whose device disappears becomes `.disconnected`;
+    /// `.disconnected` whose device reappears resumes `.running` (the
+    /// passive-reconnect half of the AC -- distinct from `selecting`, which
+    /// covers the tech manually picking a device). `.stopped` is unaffected,
+    /// since there's no active device to lose or regain.
     func handlingDeviceListChange(availableDeviceIDs: Set<String>) -> CaptureConnectionState {
-        guard case .running(let deviceID) = self, !availableDeviceIDs.contains(deviceID) else {
+        switch self {
+        case .running(let deviceID) where !availableDeviceIDs.contains(deviceID):
+            return .disconnected(deviceID: deviceID)
+        case .disconnected(let deviceID) where availableDeviceIDs.contains(deviceID):
+            return .running(deviceID: deviceID)
+        default:
             return self
         }
-        return .disconnected(deviceID: deviceID)
     }
 
     /// A user picking a device (initial selection, switching devices, or

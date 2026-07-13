@@ -12,9 +12,12 @@
 //  Device selection (ticket #4): start(deviceID:) optionally routes the
 //  underlying input audio unit at a specific Core Audio device via
 //  kAudioOutputUnitProperty_CurrentDevice before starting; nil uses
-//  AVAudioEngine's system default. onConfigurationChange fires when the
-//  engine's I/O configuration changes (e.g. the active device disappearing)
-//  so AudioPipelineViewModel can drive CaptureConnectionState (ADR 0006).
+//  AVAudioEngine's system default. Disconnect detection (ADR 0006) is
+//  driven entirely by AudioDeviceEnumerator's Core Audio device-list
+//  listener, not by AVAudioEngine's own configuration-change notification
+//  -- the two would otherwise race to report the same event, and the HAL
+//  device list is the more direct source of truth for "did this device
+//  disappear."
 //
 //  Not unit-testable in this environment (no real audio hardware / mic
 //  permission in CI/sandbox) -- see FreqTraceTests/FrequencyTrackerTests.swift
@@ -34,16 +37,11 @@ final class MicrophoneCaptureEngine {
     private let engine = AVAudioEngine()
     private let ringBuffer: AudioRingBuffer
     private(set) var isRunning = false
-    private var configurationChangeObserver: NSObjectProtocol?
 
     /// The input hardware's actual sample rate, populated once start()
     /// succeeds. May differ from AnalysisConfig.default's nominal 48 kHz --
     /// callers should reconfigure the analysis pipeline to match.
     private(set) var sampleRate: Double?
-
-    /// Fires when AVAudioEngine reports its I/O configuration changed --
-    /// notably, the active device being unplugged/disconnected.
-    var onConfigurationChange: (() -> Void)?
 
     init(ringBuffer: AudioRingBuffer) {
         self.ringBuffer = ringBuffer
@@ -69,12 +67,6 @@ final class MicrophoneCaptureEngine {
             ringBuffer.write(channelData[0], count: Int(buffer.frameLength))
         }
 
-        configurationChangeObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            self?.onConfigurationChange?()
-        }
-
         do {
             try engine.start()
         } catch {
@@ -89,10 +81,6 @@ final class MicrophoneCaptureEngine {
         guard isRunning else { return }
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        if let configurationChangeObserver {
-            NotificationCenter.default.removeObserver(configurationChangeObserver)
-            self.configurationChangeObserver = nil
-        }
         isRunning = false
     }
 

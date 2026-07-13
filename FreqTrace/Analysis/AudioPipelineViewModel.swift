@@ -71,7 +71,7 @@ final class AudioPipelineViewModel {
     private let ringBuffer: AudioRingBuffer
     private let pipeline: AudioAnalysisPipeline
     private let captureEngine: MicrophoneCaptureEngine
-    private let deviceEnumerator = AudioDeviceEnumerator(scope: .input)
+    private let deviceEnumerator = AudioDeviceEnumerator()
     private var streamTask: Task<Void, Never>?
 
     /// Persists the tech's last explicit Input Device choice across
@@ -120,35 +120,34 @@ final class AudioPipelineViewModel {
     }
 
     func stop() {
-        streamTask?.cancel()
-        streamTask = nil
-        captureEngine.stop()
+        haltCapture()
         connectionState = connectionState.stopping()
-        trackedFrequencyHz = nil
-        latestMagnitudes = []
-        splDb = nil
     }
 
+    /// Attempts to (re)start capture at `deviceID`. On success, updates
+    /// `selectedInputDeviceID`/`connectionState` and persists the choice if
+    /// requested. On failure, leaves neither stale -- resets to `.stopped`
+    /// rather than reporting a device as selected/running that never
+    /// actually started (found by code review on #4).
     private func startCapture(deviceID: String, persistChoice: Bool) {
-        streamTask?.cancel()
-        captureEngine.stop()
+        haltCapture()
+
+        let coreAudioDeviceID = deviceEnumerator.deviceID(forUID: deviceID)
+        do {
+            try captureEngine.start(deviceID: coreAudioDeviceID)
+        } catch {
+            // No hardware/permission in this environment (or denied by the
+            // user), or the device vanished between resolving it and
+            // starting -- readouts stay at their placeholder state.
+            connectionState = .stopped
+            return
+        }
 
         if persistChoice {
             UserDefaults.standard.set(deviceID, forKey: Self.persistedDeviceIDDefaultsKey)
         }
         selectedInputDeviceID = deviceID
-
-        do {
-            let coreAudioDeviceID = deviceEnumerator.deviceID(forUID: deviceID)
-            try captureEngine.start(deviceID: coreAudioDeviceID)
-        } catch {
-            // No hardware/permission in this environment (or denied by the
-            // user) -- readouts simply stay at their placeholder state.
-            return
-        }
         connectionState = connectionState.selecting(deviceID: deviceID)
-
-        captureEngine.onConfigurationChange = { [weak self] in self?.handleConfigurationChange() }
 
         let pipeline = pipeline
         streamTask = Task { [weak self] in
@@ -162,20 +161,29 @@ final class AudioPipelineViewModel {
         }
     }
 
+    /// Reacts to Core Audio reporting the device list changed -- the single
+    /// source of truth for both directions of ADR 0006's disconnect
+    /// behavior: the active device disappearing (-> `.disconnected`, engine
+    /// stopped) and a previously-disconnected device reappearing (passive
+    /// reconnect -> resumes capture, distinct from the tech manually
+    /// picking a device via selectInputDevice).
     private func refreshAvailableDevices() {
         availableInputDevices = deviceEnumerator.availableDevices()
-        connectionState = connectionState.handlingDeviceListChange(availableDeviceIDs: Set(availableInputDevices.map(\.id)))
-        if case .disconnected = connectionState {
-            handleConfigurationChange()
+        let availableIDs = Set(availableInputDevices.map(\.id))
+        let nextState = connectionState.handlingDeviceListChange(availableDeviceIDs: availableIDs)
+
+        switch (connectionState, nextState) {
+        case (.running, .disconnected):
+            haltCapture()
+            connectionState = nextState
+        case (.disconnected, .running(let deviceID)):
+            startCapture(deviceID: deviceID, persistChoice: false)
+        default:
+            connectionState = nextState
         }
     }
 
-    /// Called when AVAudioEngine reports its I/O configuration changed
-    /// (notably: the active device disappeared) -- stops the live pipeline
-    /// (ADR 0006: no silent fallback) while leaving `connectionState` for
-    /// the UI to already reflect `.disconnected` via refreshAvailableDevices.
-    private func handleConfigurationChange() {
-        guard case .disconnected = connectionState else { return }
+    private func haltCapture() {
         streamTask?.cancel()
         streamTask = nil
         captureEngine.stop()
