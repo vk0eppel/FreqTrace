@@ -66,3 +66,16 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
 - **Rendering**: waterfall uses Metal (ADR 0004).
 - Signal Generator is on the output/playback side, independent of the capture pipeline.
 - Module layout per feature not yet decided.
+
+## Frontend
+
+- **App shape**: regular Mac window app, not a menu bar utility — the waterfall needs real screen space to be readable from a distance.
+- **Everything on one screen**: no tabs, no hidden panels, no settings sheets. All controls and readouts are always visible.
+- **Three vertical zones**, stacked top to bottom:
+  1. Waterfall/RTA (toggled, see product notes) — dominant, takes remaining space. Color map differs per Appearance Mode (see below).
+  2. Measured Data row — Tracked Frequency, Anomaly Candidate (top 2-3, ranked by severity — not a single slot), SPL. Large/legible, read-only.
+  3. Controls row — Weighting, Time Averaging, Peak Hold, Freeze, Stop, Input Device picker, RTA/waterfall toggle, Signal Generator, Appearance Mode.
+- **Appearance Mode**: manual toggle, Dark (default) or high-contrast Light, not tied to system appearance (ADR 0005). Dark for dim/indoor venues, Light for bright outdoor/direct sunlight. Two distinct color maps, one designed per mode (exact palette TBD at implementation/visual-design time).
+- **Freeze vs. Stop**: two distinct controls, not one. Freeze pauses the display only (pipeline keeps running; instant catch-up on unfreeze) — for quick glances mid-show. Stop halts the AVAudioEngine capture pipeline itself — for actually being done measuring (breaks, between soundcheck and doors). See CONTEXT.md.
+- **Input Device**: picker in the Controls row. Defaults to system default on first launch, remembers last explicit choice after. On disconnect: pipeline enters Stopped state with an explicit disconnected indicator, no silent auto-fallback (ADR 0006).
+- **Deferred**: overlaying Anomaly Candidate markers directly on the waterfall graph itself (in addition to the Measured Data row) — depends on how the Metal rendering pipeline is structured; revisit later.
