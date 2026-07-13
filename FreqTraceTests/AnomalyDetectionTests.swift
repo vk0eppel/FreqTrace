@@ -162,4 +162,39 @@ struct AnomalyDetectorTests {
 
         #expect(candidates.isEmpty)
     }
+
+    // Regression tests for two bugs found by code review on #5.
+
+    @Test func aSinglePeakWithinReleaseToleranceDoesNotResetSustainProgress() {
+        var detector = AnomalyDetector()
+        let toneBin = 500
+
+        // Build up sustain progress right to the edge of promotion.
+        for _ in 0..<(AnomalyDetector.sustainFrameCount - 1) {
+            _ = detector.process(magnitudes: spectrum(withPeaksAt: [(toneBin, 1.0)]), config: config)
+        }
+        // One missed frame (e.g. the peak momentarily fell at a bin
+        // boundary) -- within releaseFrameCount's tolerance.
+        _ = detector.process(magnitudes: spectrum(withPeaksAt: []), config: config)
+        // The very next frame the tone reappears -- sustain progress
+        // should have been preserved, not reset to 0.
+        let candidates = detector.process(magnitudes: spectrum(withPeaksAt: [(toneBin, 1.0)]), config: config)
+
+        #expect(candidates.contains { abs($0.frequencyHz - Double(toneBin) * binHz) < 1 })
+    }
+
+    @Test func twoDistinctSimultaneousPeaksOneBinApartAreTrackedSeparatelyNotCollapsed() {
+        var detector = AnomalyDetector()
+        // Establish a single track at bin 500 first.
+        _ = detector.process(magnitudes: spectrum(withPeaksAt: [(500, 1.0)]), config: config)
+
+        // Now two distinct peaks appear, both within +-1 bin of the
+        // existing track -- must not silently collapse into one.
+        var lastCandidates: [AnomalyCandidate] = []
+        for _ in 0..<(AnomalyDetector.sustainFrameCount + 2) {
+            lastCandidates = detector.process(magnitudes: spectrum(withPeaksAt: [(499, 1.0), (501, 1.0)]), config: config)
+        }
+
+        #expect(lastCandidates.count == 2)
+    }
 }

@@ -111,6 +111,18 @@ actor AudioAnalysisPipeline {
             // spectrum(in:), and weightedLevelDb(...) separately (each
             // would redo the same FFT).
             if let magnitudes = tracker.spectrum(in: rollingWindow) {
+                // Copy-out/mutate/copy-back, not a direct mutating call on
+                // the stored property (found by code review, and
+                // confirmed by trying the direct call): Swift's actor
+                // isolation checker rejects `timeAveragingBlender.blend(...)`
+                // / `anomalyDetector.process(...)` called directly here
+                // ("cannot be passed 'inout' to implicitly 'async' function
+                // call") -- a real compiler limitation in this context, not
+                // a mistake to simplify away. A generic keyPath-based
+                // helper was tried too (to de-duplicate the two identical
+                // call sites) but keyPaths can't be formed to
+                // actor-isolated stored properties either, so this stays
+                // duplicated rather than fighting the type system further.
                 var blender = timeAveragingBlender
                 let blendedForTracking = blender.blend(magnitudes, preset: timeAveraging)
                 timeAveragingBlender = blender

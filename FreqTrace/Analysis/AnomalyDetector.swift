@@ -142,9 +142,14 @@ struct AnomalyDetector: Sendable {
         let peaks = PeakFinder.findPeaks(magnitudes: magnitudes, config: config)
         let candidatePeaks = peaks.filter { !HarmonicRelation.isHarmonicallyRelated($0, to: peaks) }
 
+        // Found by code review: matching against `tracks.keys.first(where:)`
+        // without excluding keys already claimed this frame let two
+        // distinct simultaneous peaks within 1 bin of the same track
+        // silently collide -- the second peak overwrote the first's
+        // update instead of starting its own track.
         var matchedKeys = Set<Int>()
         for peak in candidatePeaks {
-            if let key = tracks.keys.first(where: { abs($0 - peak.bin) <= 1 }) {
+            if let key = tracks.keys.first(where: { !matchedKeys.contains($0) && abs($0 - peak.bin) <= 1 }) {
                 var track = tracks[key]!
                 let isFlatOrGrowing = peak.magnitudeDb >= track.lastMagnitudeDb - Self.flatToleranceDb
                 track.consecutiveFrames = isFlatOrGrowing ? track.consecutiveFrames + 1 : 0
@@ -159,9 +164,15 @@ struct AnomalyDetector: Sendable {
             }
         }
 
+        // Found by code review: unconditionally zeroing consecutiveFrames
+        // on every miss defeated releaseFrameCount's entire purpose -- an
+        // already-promoted candidate would flicker out of the reported
+        // list on a single missed frame (e.g. right at a bin boundary) and
+        // have to re-accumulate all sustainFrameCount frames from scratch.
+        // Sustain progress is now only lost once the track is actually
+        // dropped past the release tolerance.
         for key in tracks.keys where !matchedKeys.contains(key) {
             tracks[key]?.missedFrames += 1
-            tracks[key]?.consecutiveFrames = 0
             if let missed = tracks[key]?.missedFrames, missed > Self.releaseFrameCount {
                 tracks.removeValue(forKey: key)
             }

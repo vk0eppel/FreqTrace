@@ -16,9 +16,12 @@
 //
 //  Peak markers (ticket #12, CONTEXT.md "Peak"): a thin line per bar at
 //  AudioPipelineViewModel.peakForRTABar(_:)'s held height, drawn above the
-//  live bar. Peaks are updated from .onChange(of: pipeline.latestMagnitudes),
-//  not inside the Canvas draw closure -- mutating view-model state during a
-//  pure rendering pass would be a SwiftUI anti-pattern.
+//  live bar. Peaks are updated in AudioPipelineViewModel.apply(_:), every
+//  hop regardless of whether RTA is the visible view (found by code
+//  review: updating them here instead, only reachable while this view is
+//  mounted, silently paused peak accumulation whenever the waterfall was
+//  shown instead -- Peak hold is supposed to be indefinite). RTAView only
+//  reads the already-tracked peaks, never mutates view-model state itself.
 //
 
 import SwiftUI
@@ -51,10 +54,6 @@ struct RTAView: View {
                     context.stroke(peakLine, with: .color(theme.text), lineWidth: 2)
                 }
             }
-        }
-        .onChange(of: pipeline.latestMagnitudes) { _, newMagnitudes in
-            let bars = RTABinning.bars(magnitudes: newMagnitudes, config: pipeline.config)
-            pipeline.updateRTABarPeaks(bars)
         }
     }
 }

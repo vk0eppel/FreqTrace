@@ -109,15 +109,6 @@ final class AudioPipelineViewModel {
     var trackedFrequencyLevelPeakDb: Float? { peakTracker.peak(for: .trackedFrequencyLevel) }
     func peakForRTABar(_ index: Int) -> Float? { peakTracker.peak(for: .rtaBar(index)) }
 
-    /// Called by RTAView whenever it computes a fresh set of bars, so the
-    /// per-bar peak markers stay live without RTAView owning any tracker
-    /// state itself.
-    func updateRTABarPeaks(_ bars: [Float]) {
-        for (index, value) in bars.enumerated() {
-            peakTracker.update(value, for: .rtaBar(index))
-        }
-    }
-
     /// The manual reset (AC: "A manual reset control clears all held
     /// peaks").
     func resetPeaks() {
@@ -277,6 +268,16 @@ final class AudioPipelineViewModel {
         }
         if result.trackedFrequencyLevelDb.isFinite {
             peakTracker.update(Float(result.trackedFrequencyLevelDb), for: .trackedFrequencyLevel)
+        }
+        // Computed here (every hop, regardless of whether RTA is the
+        // currently-visible view) rather than from RTAView's onChange, so
+        // RTA bar peaks accumulate continuously like SPL/Tracked Frequency
+        // level's peaks -- Peak hold is supposed to be indefinite
+        // (CONTEXT.md "Peak"), not paused whenever the tech is looking at
+        // the waterfall instead (found by code review).
+        let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config)
+        for (index, value) in bars.enumerated() {
+            peakTracker.update(value, for: .rtaBar(index))
         }
     }
 
