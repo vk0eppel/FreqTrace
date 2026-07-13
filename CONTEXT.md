@@ -17,7 +17,7 @@ A manually-entered number (default 0) added to the raw dBFS level to produce the
 _Avoid_: Calibration (implies an accuracy v1 doesn't have yet)
 
 **Anomaly Candidate**:
-A frequency/band flagged by the anomaly detector as narrowband, harmonically unrelated to other energy present, and sustained (flat or growing, not decaying) over a rolling window of recent frames. Covers both feedback and room resonance without distinguishing which caused it — v1 does not attempt cause classification. Multiple Anomaly Candidates can be flagged at once (e.g. two separate rings building simultaneously); the Measured Data row shows the top 2-3, ranked by severity/confidence — not collapsed to a single slot.
+A frequency/band flagged by the anomaly detector as narrowband, harmonically unrelated to other energy present, and sustained (flat or growing, not decaying) over a rolling window of recent frames. Covers both feedback and room resonance without distinguishing which caused it — v1 does not attempt cause classification. Multiple Anomaly Candidates can be flagged at once (e.g. two separate rings building simultaneously); the Measured Data row shows the top 2-3, ranked by severity/confidence — not collapsed to a single slot. Each row shows frequency + severity only (a colored dot) — no trend/state text (e.g. "rising", "sustained") for v1; that was a wireframe flourish, not a real decision. This is tied to the unified-candidate scope in ADR 0001 — if detection later distinguishes types/causes (or otherwise produces a meaningful trend signal), revisit whether trend text belongs in the row. When there are zero Anomaly Candidates, the row shows nothing — no placeholder/empty-state message.
 _Avoid_: Feedback candidate, ringing candidate, resonance candidate (each implies a specific cause; the detector doesn't know the cause in v1)
 
 **Harmonic Relation**:
@@ -38,6 +38,15 @@ _Avoid_: Pause (ambiguous with Freeze — always use the specific term)
 **Input Device**:
 The system audio input source the capture pipeline reads from. Defaults to the system default input on first launch; remembers the tech's last explicit choice thereafter. If the selected device disconnects mid-use, the pipeline enters Stopped state and the UI shows an explicit disconnected indicator — it never silently falls back to a different device, since that could show the tech data from a source they don't realize changed. See ADR 0006.
 
+**ISO Band**:
+One of the standard ISO 1/3-octave center frequencies (25, 31.5, 40, 50 Hz... matching graphic EQ fader spacing). Used by the Signal Generator's frequency control as the primary step increment (step buttons jump to the next/previous ISO Band) alongside free numeric Hz entry as a fallback for an exact custom value. Distinct from the still-deferred idea of snapping a *measured* reading (Tracked Frequency/Anomaly Candidate) to the nearest ISO Band for display — that's about rounding a measurement, this is about generating a tone at an exact standard frequency.
+
+**Signal Generator Level**:
+A numeric dB value box (e.g. "-66dB"), directly editable — not a slider. Techs read/set levels as numbers on a console, not by eyeballing a fader's visual position, so the control matches that mental model.
+
+**Signal Generator On/Off**:
+An explicit switch controlling whether the Signal Generator is actively emitting audio — deliberately a real toggle, not a passive status dot, since leaving a test tone running unnoticed is a real mistake in a live show. Distinct from Stop: this only affects the Signal Generator's own output, not the capture/analysis pipeline. The Signal Generator is fully independent of Freeze and Stop — it can keep running while the display is Frozen or the capture pipeline is Stopped, since it's on the output/playback side (see ADR 0002) and has no dependency on capture being active.
+
 **Output Device**:
 The system audio output the Signal Generator plays through. Same shape and same disconnect behavior as Input Device (own selector, no silent fallback — the generator stops and shows disconnected rather than risk playing a test tone out of an unintended output). See ADR 0006.
 
@@ -53,7 +62,7 @@ _Avoid_: Smoothing (ambiguous with Time Averaging — always specify which)
 The screen region directly below the Waterfall/RTA view showing large, glanceable current values: Tracked Frequency, Anomaly Candidate indicator, and SPL. Read-only — no controls live here.
 
 **Controls row**:
-The screen region below the Measured Data row holding all adjustable settings, grouped into zones rather than a flat list: Input Device · Analysis settings (Weighting, Time Averaging) · View controls (Peak, Freeze, Stop) · Appearance Mode · Signal Generator (waveform type, on/off, level, Output Device — far right). Deliberately separated from the Measured Data row so measured values are never adjacent to controls that change them. The RTA/waterfall toggle is not here — it lives in the top-right corner of the Waterfall/RTA zone itself, since it's about that view specifically.
+The screen region below the Measured Data row holding all adjustable settings, arranged as two fixed lines (not a wrapping flat list): Line 1 is Analysis settings (Weighting, Time Averaging), View controls (Peak, Freeze, Stop), and Signal Generator (waveform type, on/off, level — right-aligned, Output Device excluded). Line 2 is Input Device (left), Appearance Mode (center), Output Device (right). Deliberately separated from the Measured Data row so measured values are never adjacent to controls that change them. The RTA/waterfall toggle is not here — it lives in the top-right corner of the Waterfall/RTA zone itself, since it's about that view specifically.
 
 **Appearance Mode**:
 A manually user-selected display theme — Dark (default, for dim/indoor venues) or a high-contrast/Light mode (for direct sunlight/bright outdoor use). Not linked to the macOS system light/dark setting; the two lighting conditions this app targets don't correlate with a user's general OS preference. See ADR 0005.
