@@ -127,6 +127,18 @@ final class AudioPipelineViewModel {
         }
     }
 
+    /// Time Averaging (ticket #7, CONTEXT.md "Time Averaging"): Fast/Slow
+    /// preset controlling how quickly Tracked Frequency responds. Only this
+    /// ticket's scope -- other views may later expose their own Fast/Slow
+    /// choice (CONTEXT.md), but that's not implemented here.
+    var timeAveraging: TimeAveragingPreset = .fast {
+        didSet {
+            guard timeAveraging != oldValue else { return }
+            let pipeline = pipeline
+            Task { await pipeline.setTimeAveraging(timeAveraging) }
+        }
+    }
+
     /// FFT configuration in effect -- the waterfall needs this to map FFT
     /// bins to frequencies (see FrequencyAxis).
     let config: AnalysisConfig

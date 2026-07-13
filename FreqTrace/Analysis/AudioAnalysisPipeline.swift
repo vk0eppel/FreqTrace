@@ -35,6 +35,12 @@ actor AudioAnalysisPipeline {
 
     private var rollingWindow: [Float]
     private var weighting: Weighting
+    /// Time Averaging (ticket #7, CONTEXT.md "Time Averaging"): only feeds
+    /// Tracked Frequency's argmax (and its paired level reading) -- the
+    /// spectrum published in AnalysisResult.magnitudes stays the true,
+    /// unblended measurement (waterfall/RTA/SPL all need that).
+    private var timeAveraging: TimeAveragingPreset = .fast
+    private var timeAveragingBlender = TimeAveragingBlender()
     private var pollTask: Task<Void, Never>?
 
     init(config: AnalysisConfig, ringBuffer: AudioRingBuffer, weighting: Weighting = .default) {
@@ -47,6 +53,10 @@ actor AudioAnalysisPipeline {
 
     func setWeighting(_ weighting: Weighting) {
         self.weighting = weighting
+    }
+
+    func setTimeAveraging(_ preset: TimeAveragingPreset) {
+        self.timeAveraging = preset
     }
 
     /// Starts (or restarts) draining the ring buffer and returns a stream of
@@ -90,14 +100,18 @@ actor AudioAnalysisPipeline {
             // it, rather than calling trackedFrequency(in:weighting:),
             // spectrum(in:), and weightedLevelDb(...) separately (each
             // would redo the same FFT).
-            if let magnitudes = tracker.spectrum(in: rollingWindow),
-               let frequency = tracker.trackedFrequency(fromMagnitudes: magnitudes, weighting: weighting) {
-                let splDb = tracker.weightedLevelDb(fromMagnitudes: magnitudes, weighting: weighting)
-                let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: magnitudes, weighting: weighting) ?? -Double.infinity
-                continuation.yield(AnalysisResult(
-                    trackedFrequencyHz: frequency, magnitudes: magnitudes, splDb: splDb,
-                    trackedFrequencyLevelDb: levelDb, timestamp: Date()
-                ))
+            if let magnitudes = tracker.spectrum(in: rollingWindow) {
+                var blender = timeAveragingBlender
+                let blendedForTracking = blender.blend(magnitudes, preset: timeAveraging)
+                timeAveragingBlender = blender
+                if let frequency = tracker.trackedFrequency(fromMagnitudes: blendedForTracking, weighting: weighting) {
+                    let splDb = tracker.weightedLevelDb(fromMagnitudes: magnitudes, weighting: weighting)
+                    let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting) ?? -Double.infinity
+                    continuation.yield(AnalysisResult(
+                        trackedFrequencyHz: frequency, magnitudes: magnitudes, splDb: splDb,
+                        trackedFrequencyLevelDb: levelDb, timestamp: Date()
+                    ))
+                }
             }
         }
         continuation.finish()

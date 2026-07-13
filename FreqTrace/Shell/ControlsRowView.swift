@@ -3,10 +3,11 @@
 //  FreqTrace
 //
 //  Two-line Controls row (see CLAUDE.md Frontend):
-//  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak reset (live,
-//  ticket #12), Freeze/Stop (live, ticket #13), Signal Generator (live,
-//  ticket #9, sine frequency control added ticket #14). SPL Offset lives
-//  in the Measured Data row's SPL block instead (ticket #6), alongside the
+//  Line 1 -- Weighting (live, ticket #3), Time Averaging (live, ticket #7),
+//  Peak reset (live, ticket #12), Freeze/Stop (live, ticket #13), Signal
+//  Generator (live, ticket #9, sine frequency control added ticket #14).
+//  SPL Offset lives in the Measured Data row's SPL block instead (ticket
+//  #6), alongside the
 //  reading it offsets, not here. Line 2 -- Input Device (live, ticket #4),
 //  Appearance Mode (center), Output Device (live, ticket #14). Remaining
 //  groups are still placeholders pending their own tickets.
@@ -33,7 +34,7 @@ struct ControlsRowView: View {
     private var line1: some View {
         HStack(spacing: 0) {
             weightingControl
-            placeholderGroup("Time Avg")
+            timeAveragingControl
             peakResetControl
             freezeStopControl
             Spacer(minLength: 0)
@@ -144,6 +145,40 @@ struct ControlsRowView: View {
             return "No Output Device"
         }
         return device.name
+    }
+
+    // Time Averaging (ticket #7, CONTEXT.md "Time Averaging"): Fast/Slow
+    // preset controlling how quickly Tracked Frequency responds to level
+    // changes -- post-FFT frame-blending, never changes FFT window
+    // size/resolution.
+    private var timeAveragingControl: some View {
+        HStack(spacing: 6) {
+            Text("TIME AVG")
+                .font(.system(size: Typography.controlSize, weight: .medium))
+                .foregroundStyle(theme.textDim)
+            ForEach(TimeAveragingPreset.allCases) { preset in
+                timeAveragingButton(preset)
+            }
+        }
+        .padding(.horizontal, 18)
+    }
+
+    private func timeAveragingButton(_ preset: TimeAveragingPreset) -> some View {
+        let isSelected = trackedFrequencyViewModel.timeAveraging == preset
+        return Button {
+            trackedFrequencyViewModel.timeAveraging = preset
+        } label: {
+            Text(preset.rawValue.uppercased())
+                .font(.system(size: Typography.controlSize, weight: .semibold))
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .foregroundStyle(isSelected ? theme.bg : theme.textDim)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isSelected ? theme.accent : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     // Peak reset (ticket #12, CONTEXT.md "Peak"): the only manual control
