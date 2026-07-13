@@ -41,9 +41,9 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
 ### Secondary but high-value
 
 - **RTA**: separate view, toggled against the waterfall (not simultaneous overlay) — resolution TBD.
-- **Peak Hold** and **Freeze** are separate, independent controls (see CONTEXT.md) — not to be conflated.
+- **Peak** and **Freeze** are separate, independent controls (see CONTEXT.md) — not to be conflated. Peak is scoped to RTA bars + numeric readouts only, never the waterfall.
 - **SPL meter**: `raw dBFS + SPL Offset` (manual numeric field, default 0, v1 has no real calibration). Uses the global Weighting. See ADR 0003.
-- **Signal Generator**: sine tone + pink noise only for v1 (no sweeps), output to default OS device, no special routing.
+- **Signal Generator**: sine tone, pink noise, white noise for v1 (no sweeps). Has its own Output Device selector (Core Audio output enumeration, same shape as Input Device) — no longer limited to the default OS device.
 - **Time Averaging**: post-FFT, per-view Fast/Slow preset (not global, not a continuous time-constant for now) — smooths a view's response across consecutive frames, independent of FFT size/frequency resolution. The Anomaly Candidate detector is hardcoded to Fast (not user-selectable); other views may expose the Fast/Slow choice. See CONTEXT.md.
 
 ### Deferred (explicitly punted, not forgotten)
@@ -72,9 +72,9 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
 - **App shape**: regular Mac window app, not a menu bar utility — the waterfall needs real screen space to be readable from a distance.
 - **Everything on one screen**: no tabs, no hidden panels, no settings sheets. All controls and readouts are always visible.
 - **Three vertical zones**, stacked top to bottom:
-  1. Waterfall/RTA (toggled, see product notes) — dominant, takes remaining space. Color map differs per Appearance Mode (see below).
+  1. Waterfall/RTA (toggled, see product notes) — dominant, takes remaining space. Color map differs per Appearance Mode (see below). The RTA/waterfall toggle itself lives in the top-right corner of this zone, not in the Controls row.
   2. Measured Data row — Tracked Frequency, Anomaly Candidate (top 2-3, ranked by severity — not a single slot), SPL. Large/legible, read-only.
-  3. Controls row — Weighting, Time Averaging, Peak Hold, Freeze, Stop, Input Device picker, RTA/waterfall toggle, Signal Generator, Appearance Mode.
+  3. Controls row — grouped into zones, not a flat list: **Input Device** (its own zone) · **Analysis settings** (Weighting, Time Averaging) · **View controls** (Peak, Freeze, Stop) · **Appearance Mode** · **Signal Generator** (own zone, far right: waveform type [sine/pink/white], on/off, level, Output Device picker).
 - **Appearance Mode**: manual toggle, Dark (default) or high-contrast Light, not tied to system appearance (ADR 0005). Dark for dim/indoor venues, Light for bright outdoor/direct sunlight. Two distinct color maps, one designed per mode (exact palette TBD at implementation/visual-design time).
 - **Freeze vs. Stop**: two distinct controls, not one. Freeze pauses the display only (pipeline keeps running; instant catch-up on unfreeze) — for quick glances mid-show. Stop halts the AVAudioEngine capture pipeline itself — for actually being done measuring (breaks, between soundcheck and doors). See CONTEXT.md.
 - **Input Device**: picker in the Controls row. Defaults to system default on first launch, remembers last explicit choice after. On disconnect: pipeline enters Stopped state with an explicit disconnected indicator, no silent auto-fallback (ADR 0006).
