@@ -140,4 +140,28 @@ struct AudioRingBufferTests {
         #expect(read == 4)
         #expect(out == [3, 4, 5, 6])
     }
+
+    @Test func overflowAcrossMultipleWritesResyncsOnRead() {
+        // Regression test: an earlier version had write() and read() racing
+        // to mutate readIndex independently, which could un-drop data that
+        // a later write had already overwritten. This exercises the
+        // multi-write overflow path (no read() call between writes) that
+        // read() must now resync past on its own.
+        let buffer = AudioRingBuffer(capacity: 4)
+
+        let first: [Float] = [1, 2]
+        first.withUnsafeBufferPointer { buffer.write($0.baseAddress!, count: $0.count) }
+
+        let second: [Float] = [3, 4, 5, 6, 7]
+        second.withUnsafeBufferPointer { buffer.write($0.baseAddress!, count: $0.count) }
+
+        var out = [Float](repeating: 0, count: 4)
+        let read = buffer.read(into: &out, count: 4)
+
+        // Total written: 1,2,3,4,5,6,7 (7 samples into a 4-capacity buffer).
+        // Only the newest 4 (4,5,6,7) should be readable; nothing stale or
+        // torn from the already-overwritten 1,2,3.
+        #expect(read == 4)
+        #expect(out == [4, 5, 6, 7])
+    }
 }

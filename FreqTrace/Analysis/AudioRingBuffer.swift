@@ -40,42 +40,44 @@ nonisolated final class AudioRingBuffer: @unchecked Sendable {
     }
 
     /// Real-time-safe: called from the AVAudioEngine tap callback. Copies up
-    /// to `count` samples in; if the buffer is full (reader hasn't kept up),
-    /// the oldest unread samples are dropped to make room rather than
-    /// blocking.
+    /// to `count` samples in, overwriting the oldest slots if the reader
+    /// hasn't kept up, rather than blocking.
+    ///
+    /// Single-writer discipline: this is the *only* place `writeIndex` is
+    /// written, and it never touches `readIndex` -- an earlier version had
+    /// both write() and read() racing to mutate readIndex independently,
+    /// which could let a reader's store clobber a writer's overflow-advance
+    /// with a stale value, un-dropping data that had already been
+    /// physically overwritten. read() now detects and resyncs past an
+    /// overwrite itself instead.
     func write(_ samples: UnsafePointer<Float>, count: Int) {
         guard count > 0 else { return }
         let w = writeIndex.load(ordering: .relaxed)
-        var r = readIndex.load(ordering: .acquiring)
-
         let writeCount = min(count, capacity)
         let sourceOffset = count - writeCount
-
-        // Make room by advancing the read cursor past whatever this write
-        // would otherwise overwrite. This only matters when the consumer
-        // has fallen behind; the consumer's own read() still uses acquire
-        // ordering, so it never sees torn data -- worst case it reads a
-        // shorter run than it expected.
-        let used = w - r
-        let overflow = used + writeCount - capacity
-        if overflow > 0 {
-            r += overflow
-        }
 
         for i in 0..<writeCount {
             storage[(w + i) % capacity] = samples[sourceOffset + i]
         }
 
-        readIndex.store(r, ordering: .relaxed)
         writeIndex.store(w + writeCount, ordering: .releasing)
     }
 
     /// Called from the consumer (AudioAnalysisPipeline actor). Returns the
     /// number of samples actually read, which may be less than `count` if
-    /// not enough data has been written yet.
+    /// not enough data has been written yet. Single-writer discipline: this
+    /// is the only place `readIndex` is written.
     func read(into buffer: inout [Float], count: Int) -> Int {
         let w = writeIndex.load(ordering: .acquiring)
-        let r = readIndex.load(ordering: .relaxed)
+        var r = readIndex.load(ordering: .relaxed)
+
+        // If the producer has written more than `capacity` samples since our
+        // last read, it has lapped us -- the oldest unread slots are already
+        // physically overwritten. Resync forward rather than reading stale
+        // data. Safe because only this method ever writes readIndex.
+        if w - r > capacity {
+            r = w - capacity
+        }
 
         let available = max(0, w - r)
         let readCount = min(count, available, buffer.count)
