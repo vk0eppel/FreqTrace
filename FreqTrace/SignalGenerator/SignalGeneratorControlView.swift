@@ -27,7 +27,7 @@ struct SignalGeneratorControlView: View {
             .labelsHidden()
             .frame(width: 148)
 
-            SignalGeneratorLevelField(levelDB: $engine.levelDB)
+            DBValueField(value: $engine.levelDB, range: SignalGeneratorEngine.levelRangeDB)
 
             // Native Toggle per CONTEXT.md -- a real, explicit switch, not
             // a passive status dot: flipping it must actually start/stop
@@ -43,52 +43,6 @@ struct SignalGeneratorControlView: View {
         .font(.system(size: Typography.controlSize, weight: .medium))
         .foregroundStyle(theme.text)
         .padding(.horizontal, 18)
-    }
-}
-
-/// The directly-editable numeric dB level box (CONTEXT.md "Signal Generator
-/// Level") -- explicitly not a slider. Shows "-66dB"-style formatting while
-/// unfocused; while the tech is typing, the raw text is left alone so
-/// mid-edit reformatting doesn't fight their cursor.
-private struct SignalGeneratorLevelField: View {
-    @Environment(\.theme) private var theme
-    @Binding var levelDB: Double
-    @State private var text: String = ""
-    @FocusState private var isFocused: Bool
-
-    var body: some View {
-        TextField("Level", text: $text)
-            .textFieldStyle(.plain)
-            .multilineTextAlignment(.trailing)
-            .frame(width: 64)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(theme.surface)
-            .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(theme.border)
-            }
-            .focused($isFocused)
-            .onAppear { text = Self.formatted(levelDB) }
-            .onChange(of: levelDB) { _, newValue in
-                if !isFocused { text = Self.formatted(newValue) }
-            }
-            .onChange(of: isFocused) { _, focused in
-                if !focused { commit() }
-            }
-            .onSubmit { commit() }
-    }
-
-    private func commit() {
-        let digits = text.filter { $0.isNumber || $0 == "-" || $0 == "." }
-        if let parsed = Double(digits) {
-            levelDB = min(max(parsed, SignalGeneratorEngine.levelRangeDB.lowerBound), SignalGeneratorEngine.levelRangeDB.upperBound)
-        }
-        text = Self.formatted(levelDB)
-    }
-
-    private static func formatted(_ db: Double) -> String {
-        "\(Int(db.rounded()))dB"
     }
 }
 

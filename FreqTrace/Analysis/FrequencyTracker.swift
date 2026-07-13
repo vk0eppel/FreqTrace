@@ -30,6 +30,17 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     private let fftSetup: FFTSetup
     private let hannWindow: [Float]
 
+    /// Sum of the (unweighted) magnitude spectrum for a synthetic
+    /// full-scale (amplitude 1.0) 1kHz reference tone, computed once at
+    /// init through the exact same FFT/window pipeline every real
+    /// measurement uses. weightedLevelDb(fromMagnitudes:weighting:)
+    /// normalizes against this so a full-scale signal reads ~0dB --
+    /// self-calibrating rather than a hardcoded constant, so it stays
+    /// correct if `config` (window size, sample rate) ever changes,
+    /// without needing to derive vDSP's FFT/window scaling convention by
+    /// hand. See SPLTests.
+    private let fullScalePower: Float
+
     init(config: AnalysisConfig) {
         precondition(
             config.windowSize > 0 && (config.windowSize & (config.windowSize - 1)) == 0,
@@ -45,6 +56,18 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         var window = [Float](repeating: 0, count: config.windowSize)
         vDSP_hann_window(&window, vDSP_Length(config.windowSize), Int32(vDSP_HANN_NORM))
         self.hannWindow = window
+
+        // Self-calibration: run a synthetic reference tone through the
+        // static (self-independent) FFT helper, since all other stored
+        // properties above are already set but fullScalePower itself isn't
+        // yet -- Swift requires every stored property to have a value
+        // before any instance method call, so this can't call the
+        // instance-method computeMagnitudes(in:) here.
+        let referenceTone = Self.sineWave(frequency: 1000, amplitude: 1.0, sampleRate: config.sampleRate, count: config.windowSize)
+        let referenceMagnitudes = Self.computeMagnitudes(
+            in: referenceTone, hannWindow: window, fftSetup: setup, log2n: log2n, windowSize: config.windowSize
+        ) ?? []
+        self.fullScalePower = referenceMagnitudes.reduce(0, +)
     }
 
     deinit {
@@ -101,8 +124,39 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         return Double(bestBin) * binHz
     }
 
+    /// Weighted overall level in dB from an already-computed magnitude
+    /// spectrum, normalized against fullScalePower so a full-scale signal
+    /// reads ~0dB ("dBFS") -- the SPL meter's seam (ticket #6, CONTEXT.md
+    /// "SPL Offset"). Sums weighted power across all bins rather than
+    /// picking a single peak (contrast with trackedFrequency(fromMagnitudes:)),
+    /// since an overall level describes the whole spectrum's energy, not
+    /// one dominant frequency.
+    func weightedLevelDb(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Double {
+        let binHz = config.sampleRate / Double(config.windowSize)
+        var weightedPower: Double = 0
+        for bin in 1..<magnitudes.count {
+            let frequency = Double(bin) * binHz
+            let gainLinearPower = pow(10, weighting.gainDb(at: frequency) / 10)
+            weightedPower += Double(magnitudes[bin]) * gainLinearPower
+        }
+        guard fullScalePower > 0 else { return -Double.infinity }
+        return 10 * log10(max(weightedPower, 1e-12) / Double(fullScalePower))
+    }
+
     private func computeMagnitudes(in samples: [Float]) -> [Float]? {
-        let n = config.windowSize
+        Self.computeMagnitudes(in: samples, hannWindow: hannWindow, fftSetup: fftSetup, log2n: log2n, windowSize: config.windowSize)
+    }
+
+    private static func sineWave(frequency: Double, amplitude: Float, sampleRate: Double, count: Int) -> [Float] {
+        (0..<count).map { i in
+            amplitude * Float(sin(2 * Double.pi * frequency * Double(i) / sampleRate))
+        }
+    }
+
+    private static func computeMagnitudes(
+        in samples: [Float], hannWindow: [Float], fftSetup: FFTSetup, log2n: vDSP_Length, windowSize: Int
+    ) -> [Float]? {
+        let n = windowSize
         guard samples.count >= n else { return nil }
         let windowStart = samples.count - n
 

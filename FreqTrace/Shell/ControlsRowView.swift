@@ -3,10 +3,11 @@
 //  FreqTrace
 //
 //  Two-line Controls row (see CLAUDE.md Frontend):
-//  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak/Freeze/Stop,
-//  Signal Generator (live, ticket #9). Line 2 -- Input Device (left),
-//  Appearance Mode (center), Output Device (right). Remaining groups are
-//  still placeholders pending their own tickets.
+//  Line 1 -- Weighting (live, ticket #3), SPL Offset (live, ticket #6),
+//  Time Averaging, Peak/Freeze/Stop, Signal Generator (live, ticket #9).
+//  Line 2 -- Input Device (left), Appearance Mode (center), Output Device
+//  (right). Remaining groups are still placeholders pending their own
+//  tickets.
 //
 
 import SwiftUI
@@ -30,6 +31,7 @@ struct ControlsRowView: View {
     private var line1: some View {
         HStack(spacing: 0) {
             weightingControl
+            splOffsetControl
             placeholderGroup("Time Avg")
             placeholderGroup("Peak / Freeze / Stop")
             Spacer(minLength: 0)
@@ -91,6 +93,25 @@ struct ControlsRowView: View {
                 .background(Circle().fill(isSelected ? theme.accent : Color.clear))
         }
         .buttonStyle(.plain)
+    }
+
+    // The SPL Offset control (CONTEXT.md "SPL Offset"): a bare-bones
+    // manual numeric field, no calibration workflow -- ADR 0003. Displayed
+    // = raw dBFS + this offset (see AudioPipelineViewModel.formattedSPL).
+    private var splOffsetControl: some View {
+        HStack(spacing: 6) {
+            Text("SPL OFFSET")
+                .font(.system(size: Typography.controlSize, weight: .medium))
+                .foregroundStyle(theme.textDim)
+            DBValueField(
+                value: Binding(
+                    get: { trackedFrequencyViewModel.splOffsetDb },
+                    set: { trackedFrequencyViewModel.splOffsetDb = $0 }
+                ),
+                range: AudioPipelineViewModel.splOffsetRangeDB
+            )
+        }
+        .padding(.horizontal, 18)
     }
 }
 

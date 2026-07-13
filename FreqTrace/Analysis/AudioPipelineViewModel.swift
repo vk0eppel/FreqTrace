@@ -27,6 +27,16 @@ final class AudioPipelineViewModel {
     /// Raw, unweighted power magnitude spectrum from the most recent hop --
     /// the waterfall's per-frame row. See FrequencyTracker.spectrum(in:).
     private(set) var latestMagnitudes: [Float] = []
+    /// Raw (pre-offset) weighted level in dB from the most recent hop. See
+    /// FrequencyTracker.weightedLevelDb(fromMagnitudes:weighting:).
+    private(set) var splDb: Double?
+    /// The SPL meter's manual numeric offset (CONTEXT.md "SPL Offset"),
+    /// default 0 -- no real calibration in v1 (ADR 0003); this is a bare
+    /// user-entered value, not derived from anything.
+    var splOffsetDb: Double = 0
+    /// Arbitrary but generous headroom for the offset field -- no
+    /// calibration workflow exists yet to derive a "correct" range from.
+    static let splOffsetRangeDB: ClosedRange<Double> = -60...60
     private(set) var isCaptureActive = false
 
     var weighting: Weighting = .default {
@@ -82,6 +92,7 @@ final class AudioPipelineViewModel {
                 guard !Task.isCancelled else { break }
                 self?.trackedFrequencyHz = result.trackedFrequencyHz
                 self?.latestMagnitudes = result.magnitudes
+                self?.splDb = result.splDb
             }
         }
     }
@@ -93,6 +104,7 @@ final class AudioPipelineViewModel {
         isCaptureActive = false
         trackedFrequencyHz = nil
         latestMagnitudes = []
+        splDb = nil
     }
 
     /// "2.34 kHz"-style formatting for the Measured Data row's hero number,
@@ -100,5 +112,13 @@ final class AudioPipelineViewModel {
     var formattedFrequency: String {
         guard let hz = trackedFrequencyHz else { return "\u{2014}" }
         return String(format: "%.2f kHz", hz / 1000)
+    }
+
+    /// "86 dB"-style formatting for the SPL block, including the manual
+    /// offset -- displayed = raw dBFS + offset (ticket #6), or an em dash
+    /// placeholder before capture produces a first result.
+    var formattedSPL: String {
+        guard let splDb else { return "\u{2014}" }
+        return "\(Int((splDb + splOffsetDb).rounded())) dB"
     }
 }

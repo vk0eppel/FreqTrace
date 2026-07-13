@@ -3,9 +3,10 @@
 //  FreqTrace
 //
 //  The Measured Data row: Tracked Frequency (hero, live-wired to
-//  AudioPipelineViewModel per ticket #3), Anomaly Candidates, SPL.
-//  Read-only, no controls (see CLAUDE.md Frontend). Anomaly Candidates/SPL
-//  are still placeholders pending their own tickets.
+//  AudioPipelineViewModel per ticket #3), Anomaly Candidates, SPL (live per
+//  ticket #6). Read-only, no controls (see CLAUDE.md Frontend) -- the SPL
+//  Offset control itself lives in the Controls row, not here. Anomaly
+//  Candidates is still a placeholder pending its own ticket.
 //
 
 import SwiftUI
@@ -28,9 +29,9 @@ struct MeasuredDataRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             divider
             dataBlock(label: "SPL") {
-                Text("—")
+                Text(trackedFrequencyViewModel.formattedSPL)
                     .font(.system(size: Typography.secondarySize, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(theme.textFaint)
+                    .foregroundStyle(trackedFrequencyViewModel.splDb == nil ? theme.textFaint : theme.text)
             }
         }
         .padding(.horizontal, 20)
