@@ -35,6 +35,11 @@ final class AudioPipelineViewModel {
     /// CONTEXT.md "Peak" -- "Tracked Frequency level"). See
     /// FrequencyTracker.trackedFrequencyLevelDb(fromMagnitudes:weighting:).
     private(set) var trackedFrequencyLevelDb: Double?
+    /// Top 2-3 Anomaly Candidates (ticket #5, ADR 0001, CONTEXT.md
+    /// "Anomaly Candidate"), ranked by severity -- empty (not nil) when
+    /// nothing is currently flagged, so the Measured Data row can show
+    /// nothing rather than a placeholder.
+    private(set) var anomalyCandidates: [AnomalyCandidate] = []
     /// The SPL meter's manual numeric offset (CONTEXT.md "SPL Offset"),
     /// default 0 -- no real calibration in v1 (ADR 0003); this is a bare
     /// user-entered value, not derived from anything.
@@ -266,6 +271,7 @@ final class AudioPipelineViewModel {
         latestMagnitudes = result.magnitudes
         splDb = result.splDb
         trackedFrequencyLevelDb = result.trackedFrequencyLevelDb
+        anomalyCandidates = result.anomalyCandidates
         if result.splDb.isFinite {
             peakTracker.update(Float(result.splDb), for: .spl)
         }
@@ -312,6 +318,7 @@ final class AudioPipelineViewModel {
         latestMagnitudes = []
         splDb = nil
         trackedFrequencyLevelDb = nil
+        anomalyCandidates = []
     }
 
     /// "2.34 kHz"-style formatting for the Measured Data row's hero number,

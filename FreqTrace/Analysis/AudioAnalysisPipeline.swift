@@ -25,6 +25,10 @@ struct AnalysisResult: Sendable {
     /// CONTEXT.md "Peak" -- "Tracked Frequency level") -- distinct from
     /// splDb, which sums across the whole weighted spectrum.
     let trackedFrequencyLevelDb: Double
+    /// Top 2-3 Anomaly Candidates, ranked by severity (ticket #5, ADR
+    /// 0001, CONTEXT.md "Anomaly Candidate"), or empty when nothing is
+    /// currently flagged.
+    let anomalyCandidates: [AnomalyCandidate]
     let timestamp: Date
 }
 
@@ -41,6 +45,12 @@ actor AudioAnalysisPipeline {
     /// unblended measurement (waterfall/RTA/SPL all need that).
     private var timeAveraging: TimeAveragingPreset = .fast
     private var timeAveragingBlender = TimeAveragingBlender()
+    /// Anomaly Candidate detection (ticket #5) runs on the raw spectrum,
+    /// never the Time-Averaging-blended one -- hardcoded to Fast
+    /// (CONTEXT.md "Time Averaging"): the detector's own rolling sustain
+    /// window is what governs its responsiveness, not this pipeline's
+    /// user-selectable Tracked Frequency smoothing.
+    private var anomalyDetector = AnomalyDetector()
     private var pollTask: Task<Void, Never>?
 
     init(config: AnalysisConfig, ringBuffer: AudioRingBuffer, weighting: Weighting = .default) {
@@ -107,9 +117,12 @@ actor AudioAnalysisPipeline {
                 if let frequency = tracker.trackedFrequency(fromMagnitudes: blendedForTracking, weighting: weighting) {
                     let splDb = tracker.weightedLevelDb(fromMagnitudes: magnitudes, weighting: weighting)
                     let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting) ?? -Double.infinity
+                    var detector = anomalyDetector
+                    let anomalyCandidates = detector.process(magnitudes: magnitudes, config: config)
+                    anomalyDetector = detector
                     continuation.yield(AnalysisResult(
                         trackedFrequencyHz: frequency, magnitudes: magnitudes, splDb: splDb,
-                        trackedFrequencyLevelDb: levelDb, timestamp: Date()
+                        trackedFrequencyLevelDb: levelDb, anomalyCandidates: anomalyCandidates, timestamp: Date()
                     ))
                 }
             }

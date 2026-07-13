@@ -3,13 +3,20 @@
 //  FreqTrace
 //
 //  The Measured Data row: Tracked Frequency (hero, live-wired to
-//  AudioPipelineViewModel per ticket #3), Anomaly Candidates, SPL (live per
-//  ticket #6, moved here from the Controls row so the SPL Offset control
-//  sits with the reading it affects). Anomaly Candidates is still a
-//  placeholder pending its own ticket. Peak markers (ticket #12,
-//  CONTEXT.md "Peak") show alongside Tracked Frequency's and SPL's live
-//  values -- never appearing at all until a peak has actually been
-//  recorded, no placeholder dash.
+//  AudioPipelineViewModel per ticket #3), Anomaly Candidates (live per
+//  ticket #5), SPL (live per ticket #6, moved here from the Controls row
+//  so the SPL Offset control sits with the reading it affects). Peak
+//  markers (ticket #12, CONTEXT.md "Peak") show alongside Tracked
+//  Frequency's and SPL's live values -- never appearing at all until a
+//  peak has actually been recorded, no placeholder dash.
+//
+//  Anomaly Candidates (CONTEXT.md, "Measured Data row"): top 2-3 ranked by
+//  severity, shows nothing at all (not even a dash) when there are zero --
+//  the caption label always shows (like every other block's label), only
+//  the value area is genuinely empty. Severity is a compound visual signal
+//  (stripe height/glow, frequency-number size, text-color intensity), not
+//  a single color dot; the highest-severity row pulses, respecting
+//  accessibilityReduceMotion.
 //
 
 import SwiftUI
@@ -17,6 +24,8 @@ import SwiftUI
 struct MeasuredDataRowView: View {
     @Environment(\.theme) private var theme
     @Environment(AudioPipelineViewModel.self) private var trackedFrequencyViewModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var highestSeverityPulse = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -30,9 +39,13 @@ struct MeasuredDataRowView: View {
             }
             divider
             dataBlock(label: "ANOMALY CANDIDATES") {
-                Text("—")
-                    .font(.system(size: Typography.tertiarySize, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(theme.textFaint)
+                if !trackedFrequencyViewModel.anomalyCandidates.isEmpty {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(Array(trackedFrequencyViewModel.anomalyCandidates.enumerated()), id: \.element.id) { rank, candidate in
+                            anomalyRow(candidate, rank: rank)
+                        }
+                    }
+                }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             divider
@@ -71,6 +84,40 @@ struct MeasuredDataRowView: View {
                 range: AudioPipelineViewModel.splOffsetRangeDb
             )
         }
+    }
+
+    // Compound severity signal (rank 0 = highest): text size, color
+    // intensity, and a left stripe's height/glow all scale together --
+    // never color alone (CLAUDE.md "Severity is weighted, not just
+    // colored"). Only rank 0 gets the slow pulsing glow.
+    private func anomalyRow(_ candidate: AnomalyCandidate, rank: Int) -> some View {
+        let isHighest = rank == 0
+        let fontSize: CGFloat = rank == 0 ? 22 : (rank == 1 ? 18 : 15)
+        let colorOpacity: Double = rank == 0 ? 1.0 : (rank == 1 ? 0.75 : 0.55)
+        let stripeHeight: CGFloat = rank == 0 ? 20 : (rank == 1 ? 14 : 10)
+
+        return HStack(spacing: 8) {
+            RoundedRectangle(cornerRadius: 2)
+                .fill(theme.danger)
+                .frame(width: 4, height: stripeHeight)
+                .shadow(
+                    color: isHighest ? theme.danger.opacity(highestSeverityPulse ? 0.9 : 0.35) : .clear,
+                    radius: isHighest ? 6 : 0
+                )
+            Text(formattedAnomalyFrequency(candidate.frequencyHz))
+                .font(.system(size: fontSize, weight: .semibold, design: .monospaced))
+                .foregroundStyle(theme.danger.opacity(colorOpacity))
+        }
+        .onAppear {
+            guard isHighest, !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 1.2).repeatForever(autoreverses: true)) {
+                highestSeverityPulse = true
+            }
+        }
+    }
+
+    private func formattedAnomalyFrequency(_ hz: Double) -> String {
+        hz >= 1000 ? String(format: "%.2f kHz", hz / 1000) : String(format: "%.0f Hz", hz)
     }
 
     private func peakLabel(_ text: String) -> some View {
