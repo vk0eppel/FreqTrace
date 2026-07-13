@@ -45,7 +45,7 @@ struct WaterfallZoneView: View {
                 frequencyAxisLabels
                 timeAxisLabels
             case .rta:
-                RTAView(magnitudes: pipeline.latestMagnitudes, config: pipeline.config)
+                RTAView()
                 frequencyAxisLabels
             }
             displayModeToggle

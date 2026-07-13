@@ -31,6 +31,10 @@ final class AudioPipelineViewModel {
     /// Raw (pre-offset) weighted level in dB from the most recent hop. See
     /// FrequencyTracker.weightedLevelDb(fromMagnitudes:weighting:).
     private(set) var splDb: Double?
+    /// The level (dB) of the tracked-frequency bin itself (ticket #12,
+    /// CONTEXT.md "Peak" -- "Tracked Frequency level"). See
+    /// FrequencyTracker.trackedFrequencyLevelDb(fromMagnitudes:weighting:).
+    private(set) var trackedFrequencyLevelDb: Double?
     /// The SPL meter's manual numeric offset (CONTEXT.md "SPL Offset"),
     /// default 0 -- no real calibration in v1 (ADR 0003); this is a bare
     /// user-entered value, not derived from anything.
@@ -82,6 +86,37 @@ final class AudioPipelineViewModel {
         } else {
             freezeGate.freeze()
         }
+    }
+
+    /// Peak (ticket #12, CONTEXT.md "Peak"): one tracker shared by SPL, the
+    /// Tracked Frequency level, and each RTA bar (keyed by bar index) so a
+    /// single manual reset clears all of them together, per the AC. Never
+    /// applies to the waterfall -- nothing here is read by WaterfallZoneView's
+    /// waterfall branch.
+    enum PeakKey: Hashable {
+        case spl
+        case trackedFrequencyLevel
+        case rtaBar(Int)
+    }
+    private var peakTracker = PeakHoldTracker<PeakKey>()
+
+    var splPeakDb: Float? { peakTracker.peak(for: .spl) }
+    var trackedFrequencyLevelPeakDb: Float? { peakTracker.peak(for: .trackedFrequencyLevel) }
+    func peakForRTABar(_ index: Int) -> Float? { peakTracker.peak(for: .rtaBar(index)) }
+
+    /// Called by RTAView whenever it computes a fresh set of bars, so the
+    /// per-bar peak markers stay live without RTAView owning any tracker
+    /// state itself.
+    func updateRTABarPeaks(_ bars: [Float]) {
+        for (index, value) in bars.enumerated() {
+            peakTracker.update(value, for: .rtaBar(index))
+        }
+    }
+
+    /// The manual reset (AC: "A manual reset control clears all held
+    /// peaks").
+    func resetPeaks() {
+        peakTracker.reset()
     }
 
     var weighting: Weighting = .default {
@@ -218,6 +253,13 @@ final class AudioPipelineViewModel {
         trackedFrequencyHz = result.trackedFrequencyHz
         latestMagnitudes = result.magnitudes
         splDb = result.splDb
+        trackedFrequencyLevelDb = result.trackedFrequencyLevelDb
+        if result.splDb.isFinite {
+            peakTracker.update(Float(result.splDb), for: .spl)
+        }
+        if result.trackedFrequencyLevelDb.isFinite {
+            peakTracker.update(Float(result.trackedFrequencyLevelDb), for: .trackedFrequencyLevel)
+        }
     }
 
     /// Reacts to Core Audio reporting the device list changed -- the single
@@ -257,6 +299,7 @@ final class AudioPipelineViewModel {
         trackedFrequencyHz = nil
         latestMagnitudes = []
         splDb = nil
+        trackedFrequencyLevelDb = nil
     }
 
     /// "2.34 kHz"-style formatting for the Measured Data row's hero number,
@@ -272,5 +315,18 @@ final class AudioPipelineViewModel {
     var formattedSPL: String {
         guard let splDb, splDb.isFinite else { return "\u{2014}" }
         return "\(Int((splDb + splOffsetDb).rounded())) dB"
+    }
+
+    /// "PEAK -12dB"-style secondary readout (ticket #12, CONTEXT.md
+    /// "Peak"), or nil before any peak has been recorded (no placeholder --
+    /// this is an optional overlay, not a hero value).
+    var formattedSPLPeak: String? {
+        guard let splPeakDb, splPeakDb.isFinite else { return nil }
+        return "PEAK \(Int((splPeakDb + Float(splOffsetDb)).rounded())) dB"
+    }
+
+    var formattedTrackedFrequencyLevelPeak: String? {
+        guard let trackedFrequencyLevelPeakDb, trackedFrequencyLevelPeakDb.isFinite else { return nil }
+        return "PEAK \(Int(trackedFrequencyLevelPeakDb.rounded())) dB"
     }
 }

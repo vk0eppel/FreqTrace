@@ -6,7 +6,10 @@
 //  AudioPipelineViewModel per ticket #3), Anomaly Candidates, SPL (live per
 //  ticket #6, moved here from the Controls row so the SPL Offset control
 //  sits with the reading it affects). Anomaly Candidates is still a
-//  placeholder pending its own ticket.
+//  placeholder pending its own ticket. Peak markers (ticket #12,
+//  CONTEXT.md "Peak") show alongside Tracked Frequency's and SPL's live
+//  values -- never appearing at all until a peak has actually been
+//  recorded, no placeholder dash.
 //
 
 import SwiftUI
@@ -18,7 +21,12 @@ struct MeasuredDataRowView: View {
     var body: some View {
         HStack(spacing: 0) {
             dataBlock(label: "TRACKED FREQUENCY") {
-                heroValue(trackedFrequencyViewModel.formattedFrequency)
+                VStack(alignment: .leading, spacing: 2) {
+                    heroValue(trackedFrequencyViewModel.formattedFrequency)
+                    if let peak = trackedFrequencyViewModel.formattedTrackedFrequencyLevelPeak {
+                        peakLabel(peak)
+                    }
+                }
             }
             divider
             dataBlock(label: "ANOMALY CANDIDATES") {
@@ -33,6 +41,9 @@ struct MeasuredDataRowView: View {
                     Text(trackedFrequencyViewModel.formattedSPL)
                         .font(.system(size: Typography.secondarySize, weight: .semibold, design: .monospaced))
                         .foregroundStyle(trackedFrequencyViewModel.splDb == nil ? theme.textFaint : theme.text)
+                    if let peak = trackedFrequencyViewModel.formattedSPLPeak {
+                        peakLabel(peak)
+                    }
                     splOffsetControl
                 }
             }
@@ -60,6 +71,12 @@ struct MeasuredDataRowView: View {
                 range: AudioPipelineViewModel.splOffsetRangeDb
             )
         }
+    }
+
+    private func peakLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: Typography.subCaptionSize, weight: .medium, design: .monospaced))
+            .foregroundStyle(theme.textDim)
     }
 
     private var divider: some View {

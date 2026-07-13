@@ -3,13 +3,13 @@
 //  FreqTrace
 //
 //  Two-line Controls row (see CLAUDE.md Frontend):
-//  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak, Freeze/Stop
-//  (live, ticket #13), Signal Generator (live, ticket #9, sine frequency
-//  control added ticket #14). SPL Offset lives in the Measured Data row's
-//  SPL block instead (ticket #6), alongside the reading it offsets, not
-//  here. Line 2 -- Input Device (live, ticket #4), Appearance Mode
-//  (center), Output Device (live, ticket #14). Remaining groups are still
-//  placeholders pending their own tickets.
+//  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak reset (live,
+//  ticket #12), Freeze/Stop (live, ticket #13), Signal Generator (live,
+//  ticket #9, sine frequency control added ticket #14). SPL Offset lives
+//  in the Measured Data row's SPL block instead (ticket #6), alongside the
+//  reading it offsets, not here. Line 2 -- Input Device (live, ticket #4),
+//  Appearance Mode (center), Output Device (live, ticket #14). Remaining
+//  groups are still placeholders pending their own tickets.
 //
 
 import SwiftUI
@@ -34,7 +34,7 @@ struct ControlsRowView: View {
         HStack(spacing: 0) {
             weightingControl
             placeholderGroup("Time Avg")
-            placeholderGroup("Peak")
+            peakResetControl
             freezeStopControl
             Spacer(minLength: 0)
             SignalGeneratorControlView(engine: signalGenerator)
@@ -144,6 +144,24 @@ struct ControlsRowView: View {
             return "No Output Device"
         }
         return device.name
+    }
+
+    // Peak reset (ticket #12, CONTEXT.md "Peak"): the only manual control
+    // Peak has -- clears every held peak (RTA bars, SPL, Tracked Frequency
+    // level) at once. Peak itself has no on/off state of its own; the
+    // markers just always show once a value has been recorded.
+    private var peakResetControl: some View {
+        Button {
+            trackedFrequencyViewModel.resetPeaks()
+        } label: {
+            Text("PEAK RESET")
+                .font(.system(size: Typography.controlSize, weight: .semibold))
+                .foregroundStyle(theme.textDim)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 8)
     }
 
     // Freeze + Stop (ticket #13, CONTEXT.md "Freeze" / "Stop"): two

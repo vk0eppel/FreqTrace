@@ -99,6 +99,24 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     /// spectrum(in:) and derive both from it, rather than running the FFT
     /// twice per hop.
     func trackedFrequency(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Double? {
+        guard let bestBin = bestWeightedBin(fromMagnitudes: magnitudes, weighting: weighting) else { return nil }
+        let binHz = config.sampleRate / Double(config.windowSize)
+        return Double(bestBin) * binHz
+    }
+
+    /// The level (dB) of whichever bin trackedFrequency(fromMagnitudes:
+    /// weighting:) would pick as the winner (ticket #12, CONTEXT.md "Peak"
+    /// -- "Tracked Frequency level"). Distinct from SPL, which sums level
+    /// across the whole weighted spectrum rather than reporting one bin's.
+    func trackedFrequencyLevelDb(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Double? {
+        guard let bestBin = bestWeightedBin(fromMagnitudes: magnitudes, weighting: weighting) else { return nil }
+        return Double(MagnitudeScaling.decibels(power: magnitudes[bestBin]))
+    }
+
+    /// Shared by trackedFrequency(fromMagnitudes:weighting:) and
+    /// trackedFrequencyLevelDb(fromMagnitudes:weighting:) so both derive
+    /// from the same weighted argmax rather than each re-running it.
+    private func bestWeightedBin(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Int? {
         let binHz = config.sampleRate / Double(config.windowSize)
         let nyquist = config.sampleRate / 2
 
@@ -120,8 +138,7 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
             }
         }
 
-        guard bestBin > 0 else { return nil }
-        return Double(bestBin) * binHz
+        return bestBin > 0 ? bestBin : nil
     }
 
     /// Weighted overall level in dB from an already-computed magnitude

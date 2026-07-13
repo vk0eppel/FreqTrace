@@ -21,6 +21,10 @@ struct AnalysisResult: Sendable {
     /// CONTEXT.md "SPL Offset"). Uses the same shared Weighting as
     /// trackedFrequencyHz.
     let splDb: Double
+    /// The level (dB) of the tracked-frequency bin itself (ticket #12,
+    /// CONTEXT.md "Peak" -- "Tracked Frequency level") -- distinct from
+    /// splDb, which sums across the whole weighted spectrum.
+    let trackedFrequencyLevelDb: Double
     let timestamp: Date
 }
 
@@ -89,7 +93,11 @@ actor AudioAnalysisPipeline {
             if let magnitudes = tracker.spectrum(in: rollingWindow),
                let frequency = tracker.trackedFrequency(fromMagnitudes: magnitudes, weighting: weighting) {
                 let splDb = tracker.weightedLevelDb(fromMagnitudes: magnitudes, weighting: weighting)
-                continuation.yield(AnalysisResult(trackedFrequencyHz: frequency, magnitudes: magnitudes, splDb: splDb, timestamp: Date()))
+                let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: magnitudes, weighting: weighting) ?? -Double.infinity
+                continuation.yield(AnalysisResult(
+                    trackedFrequencyHz: frequency, magnitudes: magnitudes, splDb: splDb,
+                    trackedFrequencyLevelDb: levelDb, timestamp: Date()
+                ))
             }
         }
         continuation.finish()

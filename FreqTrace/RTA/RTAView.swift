@@ -14,17 +14,22 @@
 //  live shape" at a glance versus the waterfall's per-pixel color coding,
 //  which exists there to encode history that an RTA doesn't have.
 //
+//  Peak markers (ticket #12, CONTEXT.md "Peak"): a thin line per bar at
+//  AudioPipelineViewModel.peakForRTABar(_:)'s held height, drawn above the
+//  live bar. Peaks are updated from .onChange(of: pipeline.latestMagnitudes),
+//  not inside the Canvas draw closure -- mutating view-model state during a
+//  pure rendering pass would be a SwiftUI anti-pattern.
+//
 
 import SwiftUI
 
 struct RTAView: View {
     @Environment(\.theme) private var theme
-    let magnitudes: [Float]
-    let config: AnalysisConfig
+    @Environment(AudioPipelineViewModel.self) private var pipeline
 
     var body: some View {
         Canvas { context, size in
-            let bars = RTABinning.bars(magnitudes: magnitudes, config: config)
+            let bars = RTABinning.bars(magnitudes: pipeline.latestMagnitudes, config: pipeline.config)
             guard !bars.isEmpty else { return }
 
             let barCount = bars.count
@@ -37,14 +42,27 @@ struct RTAView: View {
                 let rect = CGRect(x: x, y: size.height - barHeight, width: barWidth, height: barHeight)
                 let path = Path(roundedRect: rect, cornerSize: CGSize(width: 2, height: 2))
                 context.fill(path, with: .color(theme.accent))
+
+                if let peak = pipeline.peakForRTABar(index) {
+                    let peakY = size.height - size.height * CGFloat(peak)
+                    var peakLine = Path()
+                    peakLine.move(to: CGPoint(x: x, y: peakY))
+                    peakLine.addLine(to: CGPoint(x: x + barWidth, y: peakY))
+                    context.stroke(peakLine, with: .color(theme.text), lineWidth: 2)
+                }
             }
+        }
+        .onChange(of: pipeline.latestMagnitudes) { _, newMagnitudes in
+            let bars = RTABinning.bars(magnitudes: newMagnitudes, config: pipeline.config)
+            pipeline.updateRTABarPeaks(bars)
         }
     }
 }
 
 #Preview {
-    RTAView(magnitudes: [], config: .default)
+    RTAView()
         .environment(\.theme, Theme(mode: .dark))
+        .environment(AudioPipelineViewModel())
         .frame(width: 900, height: 340)
         .background(Color.black)
 }

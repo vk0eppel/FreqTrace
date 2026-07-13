@@ -144,6 +144,35 @@ struct FrequencyTrackerTests {
 
         #expect(loudMagnitudes[bin] > quietMagnitudes[bin])
     }
+
+    // trackedFrequencyLevelDb (ticket #12, CONTEXT.md "Peak" -- "Tracked
+    // Frequency level"): the level of whichever bin trackedFrequency(
+    // fromMagnitudes:weighting:) picked, in dB -- distinct from SPL (a sum
+    // across the whole weighted spectrum) and from the Hz value itself.
+
+    @Test func trackedFrequencyLevelIsLouderForALouderTone() throws {
+        let tracker = FrequencyTracker(config: config)
+        let quiet = sineWave(frequency: 1000, amplitude: 0.2, sampleRate: config.sampleRate, count: config.windowSize)
+        let loud = sineWave(frequency: 1000, amplitude: 0.8, sampleRate: config.sampleRate, count: config.windowSize)
+
+        let quietMagnitudes = try #require(tracker.spectrum(in: quiet))
+        let loudMagnitudes = try #require(tracker.spectrum(in: loud))
+
+        let quietLevel = try #require(tracker.trackedFrequencyLevelDb(fromMagnitudes: quietMagnitudes, weighting: .z))
+        let loudLevel = try #require(tracker.trackedFrequencyLevelDb(fromMagnitudes: loudMagnitudes, weighting: .z))
+
+        #expect(loudLevel > quietLevel)
+    }
+
+    @Test func trackedFrequencyLevelIsNilWhenSpectrumHasOnlyTheDCBin() {
+        // Mirrors trackedFrequency(fromMagnitudes:weighting:)'s own nil
+        // case: bin 0 (DC) is skipped as not a meaningful frequency, so a
+        // single-bin spectrum has nothing left to pick a winner from.
+        let tracker = FrequencyTracker(config: config)
+        let dcOnly: [Float] = [1.0]
+
+        #expect(tracker.trackedFrequencyLevelDb(fromMagnitudes: dcOnly, weighting: .z) == nil)
+    }
 }
 
 struct WeightingTests {
