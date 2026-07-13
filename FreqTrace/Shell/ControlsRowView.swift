@@ -5,14 +5,16 @@
 //  Placeholder for the two-line Controls row (see CLAUDE.md Frontend):
 //  Line 1 -- Weighting, Time Averaging, Peak/Freeze/Stop, Signal Generator.
 //  Line 2 -- Input Device (left), Appearance Mode (center), Output Device
-//  (right). Real controls land in later tickets; this establishes the
-//  two-line structure and grouping so nothing needs to be re-laid-out later.
+//  (right). Signal Generator (issue #9) is real and live-wired; the rest
+//  remain placeholders for later tickets. This establishes the two-line
+//  structure and grouping so nothing needs to be re-laid-out later.
 //
 
 import SwiftUI
 
 struct ControlsRowView: View {
     @Environment(\.theme) private var theme
+    @State private var signalGenerator = SignalGeneratorEngine()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -31,7 +33,7 @@ struct ControlsRowView: View {
             placeholderGroup("Time Avg")
             placeholderGroup("Peak / Freeze / Stop")
             Spacer(minLength: 0)
-            placeholderGroup("Signal Generator")
+            SignalGeneratorControlView(engine: signalGenerator)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
