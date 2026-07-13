@@ -11,7 +11,9 @@ import SwiftUI
 struct FreqTraceApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            AppShellView()
+                .environment(\.theme, Theme(mode: .default))
         }
+        .windowResizability(.contentSize)
     }
 }
