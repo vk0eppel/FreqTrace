@@ -23,7 +23,7 @@ enum MagnitudeScaling {
     /// Power magnitude -> normalized [0,1], clamped between `floorDb` and
     /// `ceilingDb`. 0 is silence (or below the noise floor); 1 is full
     /// scale or louder.
-    static func normalized(power: Float, floorDb: Float = floorDb, ceilingDb: Float = ceilingDb) -> Float {
+    static func normalized(power: Float, floorDb: Float = Self.floorDb, ceilingDb: Float = Self.ceilingDb) -> Float {
         let clamped = min(max(decibels(power: power), floorDb), ceilingDb)
         return (clamped - floorDb) / (ceilingDb - floorDb)
     }
