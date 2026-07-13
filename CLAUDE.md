@@ -43,7 +43,7 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
 
 ### Secondary but high-value
 
-- **RTA**: separate view, toggled against the waterfall (not simultaneous overlay) — resolution TBD.
+- **RTA** (ticket #11): separate view, toggled against the waterfall (not simultaneous overlay) — a live single-frame bar rendering, not a scrolling history like the waterfall. Bars are log-frequency-spaced via the same `FrequencyAxis` mapping the waterfall uses, so the two views read consistently; each bar takes the loudest bin in its range (`RTABinning`), normalized via the shared `MagnitudeScaling`. Bar count (48) is a judgment call — CLAUDE.md previously flagged resolution as TBD; 48 was picked as coarse enough to read at a glance yet fine enough to resolve the labeled bands, not derived from a spec. Bars render as a single accent color (not the waterfall's magnitude color ramp) — standard RTA convention, and a live single frame doesn't need history-encoding color. The toggle is a small pill control in the top-right corner of the graph zone (`WaterfallZoneView`), switching `displayMode` without touching capture start/stop, so both views' underlying data keeps flowing regardless of which is shown.
 - **Peak** and **Freeze** are separate, independent controls (see CONTEXT.md) — not to be conflated. Peak is scoped to RTA bars + numeric readouts only, never the waterfall.
 - **SPL meter** (ticket #6): `raw dBFS + SPL Offset` (manual numeric field, default 0, range -60...60dB, v1 has no real calibration). Uses the global Weighting — summed across the weighted magnitude spectrum (not a single peak, unlike Tracked Frequency), self-calibrated against a synthetic full-scale reference tone computed once at `FrequencyTracker` init so a full-scale signal reads ~0dB regardless of the FFT/window's own scaling convention, rather than a hand-derived/hardcoded constant. See ADR 0003 and `FrequencyTracker.weightedLevelDb`.
 - **Signal Generator**: sine tone, pink noise, white noise for v1 (no sweeps). Has its own Output Device selector (Core Audio output enumeration, same shape as Input Device) — no longer limited to the default OS device. Sine frequency control: ISO Band stepping (primary) + free numeric Hz entry (fallback); control disables/hides for pink/white noise since they have no frequency. Level is a numeric dB value box (e.g. "-66dB"), not a slider — direct/precise entry, matching how techs read levels on a console rather than eyeballing a fader position. Has an explicit On/Off switch (not just a passive status indicator) — this is a real, deliberate control, since accidentally leaving a test tone playing during a show is a real live-sound mistake. See CONTEXT.md.
@@ -52,8 +52,7 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
 ### Deferred (explicitly punted, not forgotten)
 
 - Snap-to-nearest-ISO-band display.
-- Octave Smoothing (frequency-domain bin averaging, e.g. 1/3-oct) for RTA/spectrum readability — revisit once RTA is actually being built.
-- RTA resolution/band count.
+- Octave Smoothing (frequency-domain bin averaging, e.g. 1/3-oct) for RTA/spectrum readability — RTA is now built (ticket #11) without it; revisit if the raw per-bin bars prove too noisy in practice.
 
 ### Explicitly out of scope for v1
 
