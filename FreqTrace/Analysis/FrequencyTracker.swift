@@ -38,8 +38,12 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     /// self-calibrating rather than a hardcoded constant, so it stays
     /// correct if `config` (window size, sample rate) ever changes,
     /// without needing to derive vDSP's FFT/window scaling convention by
-    /// hand. See SPLTests.
-    private let fullScalePower: Float
+    /// hand. See SPLTests. Not private: the waterfall/RTA (RTABinning,
+    /// WaterfallRenderer) need this same reference to normalize raw power
+    /// before applying MagnitudeScaling's dB floor/ceiling -- otherwise
+    /// every bin reads far above the ceiling and clamps to max regardless
+    /// of actual loudness (a real bug found via user report).
+    let fullScalePower: Float
 
     init(config: AnalysisConfig) {
         precondition(

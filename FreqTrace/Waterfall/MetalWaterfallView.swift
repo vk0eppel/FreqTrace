@@ -19,6 +19,10 @@ struct MetalWaterfallView: NSViewRepresentable {
     /// Ticket #10: selects which of WaterfallColorMap's ramps the GPU
     /// fragment shader samples from.
     var appearanceMode: AppearanceMode = .default
+    /// Bug fix: raw vDSP power isn't already on a [0,1]/dBFS scale --
+    /// WaterfallRenderer.writeRow divides by this before applying
+    /// MagnitudeScaling's dB floor/ceiling. See FrequencyTracker.fullScalePower.
+    var fullScalePower: Float = 1
 
     func makeCoordinator() -> WaterfallRenderer? {
         guard let device = MTLCreateSystemDefaultDevice() else { return nil }
@@ -40,6 +44,6 @@ struct MetalWaterfallView: NSViewRepresentable {
     func updateNSView(_ nsView: MTKView, context: Context) {
         context.coordinator?.setAppearanceMode(appearanceMode)
         guard !magnitudes.isEmpty else { return }
-        context.coordinator?.pushMagnitudes(magnitudes)
+        context.coordinator?.pushMagnitudes(magnitudes, fullScalePower: fullScalePower)
     }
 }

@@ -32,7 +32,7 @@ struct RTAView: View {
 
     var body: some View {
         Canvas { context, size in
-            let bars = RTABinning.bars(magnitudes: pipeline.latestMagnitudes, config: pipeline.config)
+            let bars = RTABinning.bars(magnitudes: pipeline.latestMagnitudes, config: pipeline.config, fullScalePower: pipeline.fullScalePower)
             guard !bars.isEmpty else { return }
 
             let barCount = bars.count

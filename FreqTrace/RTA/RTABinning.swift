@@ -26,8 +26,20 @@ enum RTABinning {
     /// a narrow peak), normalized via MagnitudeScaling. Bars with no bins
     /// in range (audible range is coarser than a very high bar count near
     /// the low end) stay at 0 (silence).
-    static func bars(magnitudes: [Float], config: AnalysisConfig, barCount: Int = defaultBarCount) -> [Float] {
+    ///
+    /// `fullScalePower` (bug fix): raw vDSP FFT power is NOT already on a
+    /// [0,1]/dBFS scale -- a full-scale tone's raw power is on the order
+    /// of 10^6-10^7 for a 4096-point window, not ~1.0 -- so it must be
+    /// referenced against a calibrated full-scale power (the same
+    /// synthetic-reference-tone technique FrequencyTracker.weightedLevelDb
+    /// already uses for SPL) before MagnitudeScaling's -80/0dB floor/
+    /// ceiling means anything. Without this, every bin reads far above the
+    /// ceiling and clamps to 1.0 regardless of actual loudness -- reported
+    /// by a user as every RTA bar pegged to max / the waterfall reading
+    /// uniformly "too loud."
+    static func bars(magnitudes: [Float], config: AnalysisConfig, barCount: Int = defaultBarCount, fullScalePower: Float) -> [Float] {
         guard barCount > 0, !magnitudes.isEmpty else { return [] }
+        let safeFullScalePower = max(fullScalePower, .leastNormalMagnitude)
 
         let binHz = config.sampleRate / Double(config.windowSize)
         var peakPowerPerBar = [Float](repeating: 0, count: barCount)
@@ -40,6 +52,6 @@ enum RTABinning {
             peakPowerPerBar[barIndex] = max(peakPowerPerBar[barIndex], magnitudes[bin])
         }
 
-        return peakPowerPerBar.map { MagnitudeScaling.normalized(power: $0) }
+        return peakPowerPerBar.map { MagnitudeScaling.normalized(power: $0 / safeFullScalePower) }
     }
 }

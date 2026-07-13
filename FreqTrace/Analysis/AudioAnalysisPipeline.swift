@@ -29,6 +29,11 @@ struct AnalysisResult: Sendable {
     /// 0001, CONTEXT.md "Anomaly Candidate"), or empty when nothing is
     /// currently flagged.
     let anomalyCandidates: [AnomalyCandidate]
+    /// FrequencyTracker.fullScalePower -- the reference the waterfall/RTA
+    /// must divide raw magnitudes by before applying MagnitudeScaling's
+    /// dB floor/ceiling (bug fix: raw vDSP power isn't already on a
+    /// [0,1]/dBFS scale).
+    let fullScalePower: Float
     let timestamp: Date
 }
 
@@ -134,7 +139,8 @@ actor AudioAnalysisPipeline {
                     anomalyDetector = detector
                     continuation.yield(AnalysisResult(
                         trackedFrequencyHz: frequency, magnitudes: magnitudes, splDb: splDb,
-                        trackedFrequencyLevelDb: levelDb, anomalyCandidates: anomalyCandidates, timestamp: Date()
+                        trackedFrequencyLevelDb: levelDb, anomalyCandidates: anomalyCandidates,
+                        fullScalePower: tracker.fullScalePower, timestamp: Date()
                     ))
                 }
             }

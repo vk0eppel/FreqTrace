@@ -40,7 +40,7 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
     private let texture: MTLTexture
     private let config: AnalysisConfig
 
-    private let lock = OSAllocatedUnfairLock<[Float]?>(initialState: nil)
+    private let lock = OSAllocatedUnfairLock<(magnitudes: [Float], fullScalePower: Float)?>(initialState: nil)
     private var historyBuffer: WaterfallHistoryBuffer
     /// Ticket #10: written from the main actor (MetalWaterfallView.
     /// updateNSView), read from draw(in:) (not guaranteed main thread) --
@@ -86,9 +86,13 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
 
     /// Real-time-safe-ish (a lock, not lock-free, but the critical section
     /// is a single pointer swap): called from the main actor whenever the
-    /// pipeline publishes a new spectrum frame.
-    func pushMagnitudes(_ magnitudes: [Float]) {
-        lock.withLock { $0 = magnitudes }
+    /// pipeline publishes a new spectrum frame. `fullScalePower` travels
+    /// alongside its magnitudes (bug fix) -- raw vDSP power isn't already
+    /// on a [0,1]/dBFS scale, so writeRow must divide by this reference
+    /// before applying MagnitudeScaling's dB floor/ceiling, the same
+    /// self-calibration technique already used for SPL.
+    func pushMagnitudes(_ magnitudes: [Float], fullScalePower: Float) {
+        lock.withLock { $0 = (magnitudes, fullScalePower) }
     }
 
     /// Ticket #10: called whenever AppearanceSettings.mode changes.
@@ -99,11 +103,11 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
 
     func draw(in view: MTKView) {
-        if let magnitudes = lock.withLock({ pending in
+        if let pushed = lock.withLock({ pending in
             defer { pending = nil }
             return pending
         }) {
-            writeRow(magnitudes)
+            writeRow(pushed.magnitudes, fullScalePower: pushed.fullScalePower)
         }
 
         guard let drawable = view.currentDrawable,
@@ -132,9 +136,10 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
         commandBuffer.commit()
     }
 
-    private func writeRow(_ magnitudes: [Float]) {
+    private func writeRow(_ magnitudes: [Float], fullScalePower: Float) {
         let row = historyBuffer.nextRowIndex()
-        var normalized = magnitudes.map { MagnitudeScaling.normalized(power: $0) }
+        let safeFullScalePower = max(fullScalePower, .leastNormalMagnitude)
+        var normalized = magnitudes.map { MagnitudeScaling.normalized(power: $0 / safeFullScalePower) }
 
         // Defensive: keep the buffer we hand to Metal exactly columnCount
         // long so region width / bytesPerRow / buffer length all agree,

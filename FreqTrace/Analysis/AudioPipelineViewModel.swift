@@ -40,6 +40,12 @@ final class AudioPipelineViewModel {
     /// nothing is currently flagged, so the Measured Data row can show
     /// nothing rather than a placeholder.
     private(set) var anomalyCandidates: [AnomalyCandidate] = []
+    /// Reference power a full-scale signal produces (FrequencyTracker.
+    /// fullScalePower) -- the waterfall/RTA divide raw magnitudes by this
+    /// before applying MagnitudeScaling's dB floor/ceiling. Defaults to 1
+    /// only until the first hop arrives; harmless since latestMagnitudes
+    /// is empty until then too.
+    private(set) var fullScalePower: Float = 1
     /// The SPL meter's manual numeric offset (CONTEXT.md "SPL Offset"),
     /// default 0 -- no real calibration in v1 (ADR 0003); this is a bare
     /// user-entered value, not derived from anything.
@@ -263,6 +269,7 @@ final class AudioPipelineViewModel {
         splDb = result.splDb
         trackedFrequencyLevelDb = result.trackedFrequencyLevelDb
         anomalyCandidates = result.anomalyCandidates
+        fullScalePower = result.fullScalePower
         if result.splDb.isFinite {
             peakTracker.update(Float(result.splDb), for: .spl)
         }
@@ -275,7 +282,7 @@ final class AudioPipelineViewModel {
         // level's peaks -- Peak hold is supposed to be indefinite
         // (CONTEXT.md "Peak"), not paused whenever the tech is looking at
         // the waterfall instead (found by code review).
-        let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config)
+        let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config, fullScalePower: result.fullScalePower)
         for (index, value) in bars.enumerated() {
             peakTracker.update(value, for: .rtaBar(index))
         }

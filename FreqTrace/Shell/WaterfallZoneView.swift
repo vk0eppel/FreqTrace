@@ -41,7 +41,10 @@ struct WaterfallZoneView: View {
         ZStack {
             switch displayMode {
             case .waterfall:
-                MetalWaterfallView(magnitudes: pipeline.latestMagnitudes, config: pipeline.config, appearanceMode: theme.mode)
+                MetalWaterfallView(
+                    magnitudes: pipeline.latestMagnitudes, config: pipeline.config,
+                    appearanceMode: theme.mode, fullScalePower: pipeline.fullScalePower
+                )
                 frequencyAxisLabels
                 timeAxisLabels
             case .rta:
