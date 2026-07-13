@@ -4,9 +4,9 @@
 //
 //  The Measured Data row: Tracked Frequency (hero, live-wired to
 //  AudioPipelineViewModel per ticket #3), Anomaly Candidates, SPL (live per
-//  ticket #6). Read-only, no controls (see CLAUDE.md Frontend) -- the SPL
-//  Offset control itself lives in the Controls row, not here. Anomaly
-//  Candidates is still a placeholder pending its own ticket.
+//  ticket #6, moved here from the Controls row so the SPL Offset control
+//  sits with the reading it affects). Anomaly Candidates is still a
+//  placeholder pending its own ticket.
 //
 
 import SwiftUI
@@ -29,14 +29,37 @@ struct MeasuredDataRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             divider
             dataBlock(label: "SPL") {
-                Text(trackedFrequencyViewModel.formattedSPL)
-                    .font(.system(size: Typography.secondarySize, weight: .semibold, design: .monospaced))
-                    .foregroundStyle(trackedFrequencyViewModel.splDb == nil ? theme.textFaint : theme.text)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(trackedFrequencyViewModel.formattedSPL)
+                        .font(.system(size: Typography.secondarySize, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(trackedFrequencyViewModel.splDb == nil ? theme.textFaint : theme.text)
+                    splOffsetControl
+                }
             }
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .background(theme.surface)
+    }
+
+    // The SPL Offset control (CONTEXT.md "SPL Offset"): a bare-bones manual
+    // numeric field, no calibration workflow -- ADR 0003. Lives with the SPL
+    // reading it offsets, rather than in the Controls row, since it's
+    // scoped to this one readout. Displayed = raw dBFS + this offset (see
+    // AudioPipelineViewModel.formattedSPL).
+    private var splOffsetControl: some View {
+        HStack(spacing: 6) {
+            Text("OFFSET")
+                .font(.system(size: Typography.subCaptionSize, weight: .regular))
+                .foregroundStyle(theme.textFaint)
+            DBValueField(
+                value: Binding(
+                    get: { trackedFrequencyViewModel.splOffsetDb },
+                    set: { trackedFrequencyViewModel.splOffsetDb = $0 }
+                ),
+                range: AudioPipelineViewModel.splOffsetRangeDb
+            )
+        }
     }
 
     private var divider: some View {
