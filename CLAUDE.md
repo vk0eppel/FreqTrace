@@ -126,3 +126,9 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
 
   Data/numeric roles use `ui-monospace`/SF Mono with tabular figures; UI chrome uses the system sans (San Francisco).
 - **Deferred**: overlaying Anomaly Candidate markers directly on the waterfall graph itself (in addition to the Measured Data row) — depends on how the Metal rendering pipeline is structured; revisit later.
+
+## Agent skills
+
+- Issue tracker: [docs/agents/issue-tracker.md](./docs/agents/issue-tracker.md)
+- Triage labels: [docs/agents/triage-labels.md](./docs/agents/triage-labels.md)
+- Domain docs: [docs/agents/domain.md](./docs/agents/domain.md)
