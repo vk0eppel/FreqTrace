@@ -3,13 +3,13 @@
 //  FreqTrace
 //
 //  Two-line Controls row (see CLAUDE.md Frontend):
-//  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak/Freeze/Stop,
-//  Signal Generator (live, ticket #9, sine frequency control added ticket
-//  #14). SPL Offset lives in the Measured Data row's SPL block instead
-//  (ticket #6), alongside the reading it offsets, not here. Line 2 --
-//  Input Device (live, ticket #4), Appearance Mode (center), Output Device
-//  (live, ticket #14). Remaining groups are still placeholders pending
-//  their own tickets.
+//  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak, Freeze/Stop
+//  (live, ticket #13), Signal Generator (live, ticket #9, sine frequency
+//  control added ticket #14). SPL Offset lives in the Measured Data row's
+//  SPL block instead (ticket #6), alongside the reading it offsets, not
+//  here. Line 2 -- Input Device (live, ticket #4), Appearance Mode
+//  (center), Output Device (live, ticket #14). Remaining groups are still
+//  placeholders pending their own tickets.
 //
 
 import SwiftUI
@@ -34,7 +34,8 @@ struct ControlsRowView: View {
         HStack(spacing: 0) {
             weightingControl
             placeholderGroup("Time Avg")
-            placeholderGroup("Peak / Freeze / Stop")
+            placeholderGroup("Peak")
+            freezeStopControl
             Spacer(minLength: 0)
             SignalGeneratorControlView(engine: signalGenerator)
         }
@@ -143,6 +144,61 @@ struct ControlsRowView: View {
             return "No Output Device"
         }
         return device.name
+    }
+
+    // Freeze + Stop (ticket #13, CONTEXT.md "Freeze" / "Stop"): two
+    // independent controls, deliberately not one. Freeze toggles on/off in
+    // place (pipeline keeps running underneath -- see
+    // AudioPipelineViewModel.toggleFreeze for the instant-catch-up
+    // behavior). Stop halts capture and swaps its own label to "Resume,"
+    // which re-initializes capture against the currently-selected Input
+    // Device rather than picking a new one.
+    private var freezeStopControl: some View {
+        HStack(spacing: 8) {
+            freezeButton
+            stopButton
+        }
+        .padding(.horizontal, 18)
+    }
+
+    private var freezeButton: some View {
+        let isFrozen = trackedFrequencyViewModel.isFrozen
+        return Button {
+            trackedFrequencyViewModel.toggleFreeze()
+        } label: {
+            Text("FREEZE")
+                .font(.system(size: Typography.controlSize, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .foregroundStyle(isFrozen ? theme.bg : theme.textDim)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isFrozen ? theme.accent : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var stopButton: some View {
+        let isActive = trackedFrequencyViewModel.isCaptureActive
+        return Button {
+            if isActive {
+                trackedFrequencyViewModel.stop()
+            } else {
+                trackedFrequencyViewModel.resumeCapture()
+            }
+        } label: {
+            Text(isActive ? "STOP" : "RESUME")
+                .font(.system(size: Typography.controlSize, weight: .semibold))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .foregroundStyle(isActive ? theme.danger : theme.bg)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isActive ? Color.clear : theme.accent)
+                )
+        }
+        .buttonStyle(.plain)
     }
 
     private func placeholderGroup(_ label: String) -> some View {

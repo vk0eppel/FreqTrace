@@ -56,6 +56,34 @@ final class AudioPipelineViewModel {
         return false
     }
 
+    /// Gates all three published-from-one-hop properties
+    /// (trackedFrequencyHz/latestMagnitudes/splDb) together as a single
+    /// AnalysisResult, rather than three separate gates -- they always
+    /// update in lockstep from one hop, so one gate is simpler and still
+    /// gives every consumer (waterfall, Measured Data row) the same
+    /// instant-catch-up snapshot.
+    private var freezeGate = FreezeGate<AnalysisResult>()
+
+    /// Freeze (CONTEXT.md "Freeze"): pauses on-screen updates only -- the
+    /// capture/FFT/tracking pipeline underneath keeps running and its
+    /// results keep flowing into `freezeGate`. Distinct from
+    /// `connectionState`, which tracks the pipeline itself and is untouched
+    /// by freezing.
+    var isFrozen: Bool { freezeGate.isFrozen }
+
+    /// Toggles Freeze. Unfreezing immediately applies the most recently
+    /// held result, if the pipeline produced one while frozen -- the
+    /// "instant catch-up" the AC requires, never a queued replay.
+    func toggleFreeze() {
+        if freezeGate.isFrozen {
+            if let result = freezeGate.unfreeze() {
+                apply(result)
+            }
+        } else {
+            freezeGate.freeze()
+        }
+    }
+
     var weighting: Weighting = .default {
         didSet {
             guard weighting != oldValue else { return }
@@ -124,6 +152,22 @@ final class AudioPipelineViewModel {
         connectionState = connectionState.stopping()
     }
 
+    /// Resumes capture after Stop (CONTEXT.md "Stop"): re-initializes
+    /// capture against the currently-selected Input Device, the same
+    /// resolution `startCapture` already performs -- not a fresh device
+    /// pick, so the choice isn't re-persisted. Falls back to `start()`'s
+    /// system-default/persisted-choice resolution if no device is known yet
+    /// (e.g. Stop was hit before capture ever started successfully). A
+    /// no-op if capture is already active.
+    func resumeCapture() {
+        guard !isCaptureActive else { return }
+        guard let deviceID = selectedInputDeviceID else {
+            start()
+            return
+        }
+        startCapture(deviceID: deviceID, persistChoice: false)
+    }
+
     /// Attempts to (re)start capture at `deviceID`. On success, updates
     /// `selectedInputDeviceID`/`connectionState` and persists the choice if
     /// requested. On failure, leaves neither stale -- resets to `.stopped`
@@ -154,11 +198,26 @@ final class AudioPipelineViewModel {
             let stream = await pipeline.start()
             for await result in stream {
                 guard !Task.isCancelled else { break }
-                self?.trackedFrequencyHz = result.trackedFrequencyHz
-                self?.latestMagnitudes = result.magnitudes
-                self?.splDb = result.splDb
+                self?.receive(result)
             }
         }
+    }
+
+    /// Routes one hop's result through `freezeGate`: published immediately
+    /// when not frozen, held silently when frozen (CONTEXT.md "Freeze") --
+    /// the pipeline itself never knows or cares whether the display is
+    /// frozen.
+    private func receive(_ result: AnalysisResult) {
+        guard let toPublish = freezeGate.receive(result) else { return }
+        apply(toPublish)
+    }
+
+    /// Applies one AnalysisResult to the three published properties the
+    /// UI reads directly.
+    private func apply(_ result: AnalysisResult) {
+        trackedFrequencyHz = result.trackedFrequencyHz
+        latestMagnitudes = result.magnitudes
+        splDb = result.splDb
     }
 
     /// Reacts to Core Audio reporting the device list changed -- the single
