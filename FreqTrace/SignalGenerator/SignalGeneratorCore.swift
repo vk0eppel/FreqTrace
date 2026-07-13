@@ -1,0 +1,60 @@
+//
+//  SignalGeneratorCore.swift
+//  FreqTrace
+//
+//  Ties waveform selection + level together into the single call the audio
+//  engine's render block needs per sample: "give me the next sample for
+//  this waveform at this amplitude." Holds one live generator per waveform
+//  (rather than recreating on every switch) so phase/noise-filter state
+//  isn't lost and rebuilt each time the tech flips the waveform picker.
+//
+//  Pure / no AVAudioEngine dependency -- see SignalGeneratorCoreTests.
+//
+
+import Foundation
+
+struct SignalGeneratorCore<RNG: RandomNumberGenerator> {
+    /// Fixed test-tone frequency for v1 -- issue #9 only calls for a
+    /// waveform picker, on/off, and level, not a frequency control. ISO
+    /// Band / free Hz entry (per CLAUDE.md's Signal Generator bullet) is
+    /// out of scope for this ticket and can be layered on later without
+    /// changing this type's shape.
+    static var defaultSineFrequency: Double { 1000 }
+
+    private var sine: SineOscillator
+    private var white: WhiteNoiseGenerator<RNG>
+    private var pink: PinkNoiseGenerator<RNG>
+
+    init(sampleRate: Double, rng: RNG, sineFrequency: Double = SignalGeneratorCore.defaultSineFrequency) {
+        sine = SineOscillator(frequency: sineFrequency, sampleRate: sampleRate)
+
+        var whiteRNG = rng
+        var pinkRNG = rng
+        // Advance pinkRNG's state before use so it doesn't produce a stream
+        // identical to whiteRNG's (both start from the same copied seed).
+        for _ in 0..<7 {
+            _ = pinkRNG.next()
+        }
+        white = WhiteNoiseGenerator(rng: whiteRNG)
+        pink = PinkNoiseGenerator(rng: pinkRNG)
+    }
+
+    /// Advances only the selected waveform's generator and returns its next
+    /// sample scaled by `amplitude` (a linear multiplier, see `Decibels`).
+    mutating func nextSample(waveform: Waveform, amplitude: Double) -> Double {
+        switch waveform {
+        case .sine:
+            sine.nextSample() * amplitude
+        case .whiteNoise:
+            white.nextSample() * amplitude
+        case .pinkNoise:
+            pink.nextSample() * amplitude
+        }
+    }
+}
+
+extension SignalGeneratorCore where RNG == SystemRandomNumberGenerator {
+    init(sampleRate: Double, sineFrequency: Double = SignalGeneratorCore.defaultSineFrequency) {
+        self.init(sampleRate: sampleRate, rng: SystemRandomNumberGenerator(), sineFrequency: sineFrequency)
+    }
+}

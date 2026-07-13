@@ -4,9 +4,9 @@
 //
 //  Two-line Controls row (see CLAUDE.md Frontend):
 //  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak/Freeze/Stop,
-//  Signal Generator. Line 2 -- Input Device (left), Appearance Mode
-//  (center), Output Device (right). Remaining groups on Line 1 are still
-//  placeholders pending their own tickets.
+//  Signal Generator (live, ticket #9). Line 2 -- Input Device (left),
+//  Appearance Mode (center), Output Device (right). Remaining groups are
+//  still placeholders pending their own tickets.
 //
 
 import SwiftUI
@@ -14,6 +14,7 @@ import SwiftUI
 struct ControlsRowView: View {
     @Environment(\.theme) private var theme
     @Environment(TrackedFrequencyViewModel.self) private var trackedFrequencyViewModel
+    @State private var signalGenerator = SignalGeneratorEngine()
 
     var body: some View {
         VStack(spacing: 0) {
@@ -32,7 +33,7 @@ struct ControlsRowView: View {
             placeholderGroup("Time Avg")
             placeholderGroup("Peak / Freeze / Stop")
             Spacer(minLength: 0)
-            placeholderGroup("Signal Generator")
+            SignalGeneratorControlView(engine: signalGenerator)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
