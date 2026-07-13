@@ -19,10 +19,10 @@ struct SPLTests {
 
     private let config = AnalysisConfig.default
 
+    // Reuses FrequencyTracker.sineWave(...) via @testable import rather
+    // than hand-rolling a duplicate generator.
     private func sineWave(frequency: Double, amplitude: Float, sampleRate: Double, count: Int) -> [Float] {
-        (0..<count).map { i in
-            amplitude * Float(sin(2 * Double.pi * frequency * Double(i) / sampleRate))
-        }
+        FrequencyTracker.sineWave(frequency: frequency, amplitude: amplitude, sampleRate: sampleRate, count: count)
     }
 
     @Test func fullScaleToneReadsApproximatelyZeroDB() throws {

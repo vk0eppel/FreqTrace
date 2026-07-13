@@ -80,7 +80,7 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
   2. Measured Data row — Tracked Frequency, Anomaly Candidate (top 2-3, ranked by severity — not a single slot; no trend text; shows nothing when there are zero candidates), SPL. Large/legible, read-only.
      - **Severity is weighted, not just colored**: rank must register at a glance, mid-show, from a distance — so each row's severity shows through a compound signal (stripe glow/height, frequency-number size, text-color intensity), not a single small color dot. Highest severity is visually loud (glow + largest size); lower ranks recede. The highest-severity row gets a slow pulsing glow (respects `prefers-reduced-motion`).
   3. Controls row — two fixed lines, not a wrapping flat list:
-     - **Line 1**: Analysis settings (Weighting, Time Averaging) · View controls (Peak, Freeze, Stop) · Signal Generator (waveform type [sine/pink/white], on/off, level) on the right — Output Device excluded.
+     - **Line 1**: Analysis settings (Weighting, SPL Offset, Time Averaging) · View controls (Peak, Freeze, Stop) · Signal Generator (waveform type [sine/pink/white], on/off, level) on the right — Output Device excluded.
      - **Line 2**: Input Device (left) · Appearance Mode (center) · Output Device (right).
 - **Appearance Mode**: manual toggle, Dark (default) or high-contrast Light, not tied to system appearance (ADR 0005). Dark for dim/indoor venues, Light for bright outdoor/direct sunlight.
 

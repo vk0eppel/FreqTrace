@@ -36,7 +36,7 @@ final class AudioPipelineViewModel {
     var splOffsetDb: Double = 0
     /// Arbitrary but generous headroom for the offset field -- no
     /// calibration workflow exists yet to derive a "correct" range from.
-    static let splOffsetRangeDB: ClosedRange<Double> = -60...60
+    static let splOffsetRangeDb: ClosedRange<Double> = -60...60
     private(set) var isCaptureActive = false
 
     var weighting: Weighting = .default {
@@ -118,7 +118,7 @@ final class AudioPipelineViewModel {
     /// offset -- displayed = raw dBFS + offset (ticket #6), or an em dash
     /// placeholder before capture produces a first result.
     var formattedSPL: String {
-        guard let splDb else { return "\u{2014}" }
+        guard let splDb, splDb.isFinite else { return "\u{2014}" }
         return "\(Int((splDb + splOffsetDb).rounded())) dB"
     }
 }

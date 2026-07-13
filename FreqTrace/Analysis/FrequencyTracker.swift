@@ -147,7 +147,10 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         Self.computeMagnitudes(in: samples, hannWindow: hannWindow, fftSetup: fftSetup, log2n: log2n, windowSize: config.windowSize)
     }
 
-    private static func sineWave(frequency: Double, amplitude: Float, sampleRate: Double, count: Int) -> [Float] {
+    /// Not private: FreqTraceTests reuses this via @testable import instead
+    /// of each test file hand-rolling its own copy (FrequencyTrackerTests
+    /// and SPLTests both used to).
+    static func sineWave(frequency: Double, amplitude: Float = 1.0, sampleRate: Double, count: Int) -> [Float] {
         (0..<count).map { i in
             amplitude * Float(sin(2 * Double.pi * frequency * Double(i) / sampleRate))
         }

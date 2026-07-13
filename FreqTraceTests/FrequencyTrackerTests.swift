@@ -17,10 +17,10 @@ struct FrequencyTrackerTests {
     private let config = AnalysisConfig.default // 48kHz / 4096-window / 2048-hop
     private var binResolutionHz: Double { config.binResolutionHz } // ~11.72 Hz
 
+    // Reuses FrequencyTracker.sineWave(...) via @testable import rather
+    // than hand-rolling a duplicate generator.
     private func sineWave(frequency: Double, amplitude: Float = 1.0, sampleRate: Double, count: Int) -> [Float] {
-        (0..<count).map { i in
-            amplitude * Float(sin(2 * Double.pi * frequency * Double(i) / sampleRate))
-        }
+        FrequencyTracker.sineWave(frequency: frequency, amplitude: amplitude, sampleRate: sampleRate, count: count)
     }
 
     @Test func tracks1kHzToneWithinBinResolution() throws {

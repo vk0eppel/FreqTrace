@@ -108,7 +108,7 @@ struct ControlsRowView: View {
                     get: { trackedFrequencyViewModel.splOffsetDb },
                     set: { trackedFrequencyViewModel.splOffsetDb = $0 }
                 ),
-                range: AudioPipelineViewModel.splOffsetRangeDB
+                range: AudioPipelineViewModel.splOffsetRangeDb
             )
         }
         .padding(.horizontal, 18)
