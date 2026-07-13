@@ -2,21 +2,22 @@
 //  MeasuredDataRowView.swift
 //  FreqTrace
 //
-//  Placeholder for the Measured Data row: Tracked Frequency (hero),
-//  Anomaly Candidates, SPL. Read-only, no controls (see CLAUDE.md Frontend).
-//  Real live values land in later tickets; this establishes the row's
-//  structure, sizing, and typography hierarchy.
+//  The Measured Data row: Tracked Frequency (hero, live-wired to
+//  TrackedFrequencyViewModel per ticket #3), Anomaly Candidates, SPL.
+//  Read-only, no controls (see CLAUDE.md Frontend). Anomaly Candidates/SPL
+//  are still placeholders pending their own tickets.
 //
 
 import SwiftUI
 
 struct MeasuredDataRowView: View {
     @Environment(\.theme) private var theme
+    @Environment(TrackedFrequencyViewModel.self) private var trackedFrequencyViewModel
 
     var body: some View {
         HStack(spacing: 0) {
             dataBlock(label: "TRACKED FREQUENCY") {
-                heroValue("—")
+                heroValue(trackedFrequencyViewModel.formattedFrequency)
             }
             divider
             dataBlock(label: "ANOMALY CANDIDATES") {
@@ -59,12 +60,13 @@ struct MeasuredDataRowView: View {
     private func heroValue(_ text: String) -> some View {
         Text(text)
             .font(.system(size: Typography.heroSize, weight: .semibold, design: .monospaced))
-            .foregroundStyle(theme.textFaint)
+            .foregroundStyle(trackedFrequencyViewModel.trackedFrequencyHz == nil ? theme.textFaint : theme.text)
     }
 }
 
 #Preview {
     MeasuredDataRowView()
         .environment(\.theme, Theme(mode: .dark))
+        .environment(TrackedFrequencyViewModel())
         .frame(width: 1120)
 }

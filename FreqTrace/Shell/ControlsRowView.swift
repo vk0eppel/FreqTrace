@@ -2,17 +2,18 @@
 //  ControlsRowView.swift
 //  FreqTrace
 //
-//  Placeholder for the two-line Controls row (see CLAUDE.md Frontend):
-//  Line 1 -- Weighting, Time Averaging, Peak/Freeze/Stop, Signal Generator.
-//  Line 2 -- Input Device (left), Appearance Mode (center), Output Device
-//  (right). Real controls land in later tickets; this establishes the
-//  two-line structure and grouping so nothing needs to be re-laid-out later.
+//  Two-line Controls row (see CLAUDE.md Frontend):
+//  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak/Freeze/Stop,
+//  Signal Generator. Line 2 -- Input Device (left), Appearance Mode
+//  (center), Output Device (right). Remaining groups on Line 1 are still
+//  placeholders pending their own tickets.
 //
 
 import SwiftUI
 
 struct ControlsRowView: View {
     @Environment(\.theme) private var theme
+    @Environment(TrackedFrequencyViewModel.self) private var trackedFrequencyViewModel
 
     var body: some View {
         VStack(spacing: 0) {
@@ -27,7 +28,7 @@ struct ControlsRowView: View {
 
     private var line1: some View {
         HStack(spacing: 0) {
-            placeholderGroup("Weighting")
+            weightingControl
             placeholderGroup("Time Avg")
             placeholderGroup("Peak / Freeze / Stop")
             Spacer(minLength: 0)
@@ -61,10 +62,40 @@ struct ControlsRowView: View {
             .foregroundStyle(theme.textDim)
             .padding(.horizontal, 18)
     }
+
+    // The Weighting control (CONTEXT.md "Weighting"): a single global A/C/Z
+    // setting, default A. Selecting a value here changes which frequency
+    // reads as loudest in the Tracked Frequency readout.
+    private var weightingControl: some View {
+        HStack(spacing: 6) {
+            Text("WEIGHTING")
+                .font(.system(size: Typography.controlSize, weight: .medium))
+                .foregroundStyle(theme.textDim)
+            ForEach(Weighting.allCases) { option in
+                weightingButton(option)
+            }
+        }
+        .padding(.horizontal, 18)
+    }
+
+    private func weightingButton(_ option: Weighting) -> some View {
+        let isSelected = trackedFrequencyViewModel.weighting == option
+        return Button {
+            trackedFrequencyViewModel.weighting = option
+        } label: {
+            Text(option.rawValue)
+                .font(.system(size: Typography.controlSize, weight: .semibold, design: .monospaced))
+                .frame(width: 22, height: 22)
+                .foregroundStyle(isSelected ? theme.bg : theme.textDim)
+                .background(Circle().fill(isSelected ? theme.accent : Color.clear))
+        }
+        .buttonStyle(.plain)
+    }
 }
 
 #Preview {
     ControlsRowView()
         .environment(\.theme, Theme(mode: .dark))
+        .environment(TrackedFrequencyViewModel())
         .frame(width: 1120)
 }
