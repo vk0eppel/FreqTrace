@@ -12,9 +12,14 @@ import Foundation
 
 struct AnalysisResult: Sendable {
     let trackedFrequencyHz: Double
-    /// Raw, unweighted power magnitude per FFT bin (length config.windowSize
-    /// / 2) -- the waterfall's per-frame row (see WaterfallHistoryBuffer).
-    /// Deliberately unweighted; see FrequencyTracker.spectrum(in:).
+    /// Power magnitude per FFT bin (length config.windowSize / 2) -- the
+    /// waterfall's per-frame row and the RTA's source spectrum (see
+    /// WaterfallHistoryBuffer, RTABinning). Weighted (FrequencyTracker.
+    /// weightedSpectrum) and Time-Averaging-blended, same as Tracked
+    /// Frequency -- so the display responds to both controls. The Anomaly
+    /// Candidate detector does NOT read this field; it consumes
+    /// spectrum(in:)'s raw output directly inside the pipeline, since ADR
+    /// 0001 requires it to catch a resonance regardless of weighting.
     let magnitudes: [Float]
     /// Weighted overall level in dB, self-calibrated so full-scale reads
     /// ~0dB -- the SPL meter's raw (pre-offset) reading (ticket #6,
@@ -44,10 +49,11 @@ actor AudioAnalysisPipeline {
 
     private var rollingWindow: [Float]
     private var weighting: Weighting
-    /// Time Averaging (ticket #7, CONTEXT.md "Time Averaging"): only feeds
-    /// Tracked Frequency's argmax (and its paired level reading) -- the
-    /// spectrum published in AnalysisResult.magnitudes stays the true,
-    /// unblended measurement (waterfall/RTA/SPL all need that).
+    /// Time Averaging (ticket #7, CONTEXT.md "Time Averaging"): feeds
+    /// Tracked Frequency's argmax and the display spectrum
+    /// (AnalysisResult.magnitudes -- waterfall/RTA). SPL and the Anomaly
+    /// Candidate detector both keep reading the raw, unblended `magnitudes`
+    /// variable below, not this blended one.
     private var timeAveraging: TimeAveragingPreset = .fast
     private var timeAveragingBlender = TimeAveragingBlender()
     /// Anomaly Candidate detection (ticket #5) runs on the raw spectrum,
@@ -135,10 +141,19 @@ actor AudioAnalysisPipeline {
                     let splDb = tracker.weightedLevelDb(fromMagnitudes: magnitudes, weighting: weighting)
                     let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting) ?? -Double.infinity
                     var detector = anomalyDetector
+                    // Raw, unblended, unweighted magnitudes -- ADR 0001
+                    // requires the true measured spectrum so a genuine
+                    // low-frequency resonance isn't hidden by A-weighting's
+                    // roll-off or smoothed away by Slow averaging.
                     let anomalyCandidates = detector.process(magnitudes: magnitudes, config: config)
                     anomalyDetector = detector
+                    // What the waterfall/RTA actually display: Weighting
+                    // and Time Averaging both applied, unlike magnitudes
+                    // above (found by user report: these controls
+                    // previously had no visible effect on either view).
+                    let displaySpectrum = tracker.weightedSpectrum(fromMagnitudes: blendedForTracking, weighting: weighting)
                     continuation.yield(AnalysisResult(
-                        trackedFrequencyHz: frequency, magnitudes: magnitudes, splDb: splDb,
+                        trackedFrequencyHz: frequency, magnitudes: displaySpectrum, splDb: splDb,
                         trackedFrequencyLevelDb: levelDb, anomalyCandidates: anomalyCandidates,
                         fullScalePower: tracker.fullScalePower, timestamp: Date()
                     ))

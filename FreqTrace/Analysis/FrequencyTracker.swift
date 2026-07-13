@@ -117,6 +117,23 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         return Double(MagnitudeScaling.decibels(power: magnitudes[bestBin]))
     }
 
+    /// Applies `weighting`'s per-bin gain across the whole spectrum
+    /// (unlike trackedFrequency's single-winner argmax) -- what the
+    /// waterfall/RTA actually display (AudioAnalysisPipeline calls this,
+    /// not spectrum(in:)'s raw output, when building AnalysisResult.
+    /// magnitudes). DC (bin 0) always weights to silence, since
+    /// Weighting.gainDb is undefined at/below 0Hz. The Anomaly Candidate
+    /// detector deliberately does NOT use this -- it consumes spectrum(in:)'s
+    /// raw output directly, so a genuine low-frequency resonance isn't
+    /// hidden by A-weighting's roll-off (ADR 0001).
+    func weightedSpectrum(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> [Float] {
+        let binHz = config.sampleRate / Double(config.windowSize)
+        return magnitudes.enumerated().map { bin, magnitude in
+            let frequency = Double(bin) * binHz
+            return magnitude * linearPowerGain(atFrequency: frequency, weighting: weighting)
+        }
+    }
+
     /// Shared by trackedFrequency(fromMagnitudes:weighting:) and
     /// trackedFrequencyLevelDb(fromMagnitudes:weighting:) so both derive
     /// from the same weighted argmax rather than each re-running it.
@@ -130,12 +147,7 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         for bin in 1..<magnitudes.count {
             let frequency = Double(bin) * binHz
             guard frequency <= nyquist else { break }
-            let gainDb = weighting.gainDb(at: frequency)
-            // magnitudes[] from vDSP_zvmags is power (amplitude^2), so the
-            // weighting gain (an amplitude-domain dB value) is applied
-            // twice in the dB->linear conversion to stay in power terms.
-            let gainLinearPower = Float(pow(10, gainDb / 10))
-            let weighted = magnitudes[bin] * gainLinearPower
+            let weighted = magnitudes[bin] * linearPowerGain(atFrequency: frequency, weighting: weighting)
             if weighted > bestWeightedMagnitude {
                 bestWeightedMagnitude = weighted
                 bestBin = bin
@@ -143,6 +155,14 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         }
 
         return bestBin > 0 ? bestBin : nil
+    }
+
+    /// magnitudes[] from vDSP_zvmags is power (amplitude^2), so the
+    /// weighting gain (an amplitude-domain dB value) is applied twice in
+    /// the dB->linear conversion to stay in power terms. Shared by every
+    /// place a per-bin weighting gain is needed.
+    private func linearPowerGain(atFrequency frequency: Double, weighting: Weighting) -> Float {
+        Float(pow(10, weighting.gainDb(at: frequency) / 10))
     }
 
     /// Weighted overall level in dB from an already-computed magnitude
@@ -157,8 +177,7 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         var weightedPower: Double = 0
         for bin in 1..<magnitudes.count {
             let frequency = Double(bin) * binHz
-            let gainLinearPower = pow(10, weighting.gainDb(at: frequency) / 10)
-            weightedPower += Double(magnitudes[bin]) * gainLinearPower
+            weightedPower += Double(magnitudes[bin] * linearPowerGain(atFrequency: frequency, weighting: weighting))
         }
         guard fullScalePower > 0 else { return -Double.infinity }
         return 10 * log10(max(weightedPower, 1e-12) / Double(fullScalePower))

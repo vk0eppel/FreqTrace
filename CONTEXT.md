@@ -9,7 +9,7 @@ The single frequency currently carrying the most energy, per the active Weightin
 _Avoid_: Dominant frequency, peak frequency
 
 **Weighting**:
-A single global setting (A/C/Z, user-selectable, defaults to A) applied wherever the app judges "loudest" or measures level — currently the Tracked Frequency and the SPL meter. One setting shared across features, not configured per-feature.
+A single global setting (A/C/Z, user-selectable, defaults to A) applied wherever the app judges "loudest" or measures level — the Tracked Frequency, the SPL meter, and the waterfall/RTA spectrum display. One setting shared across features, not configured per-feature. Explicitly NOT applied to the Anomaly Candidate detector's own analysis (ADR 0001) — a genuine low-frequency resonance must not be hidden by A-weighting's roll-off just because it wouldn't read loud to a human ear.
 _Avoid_: Weighting curve (fine as a description, but the app concept is the single shared setting)
 
 **SPL Offset**:
@@ -51,7 +51,7 @@ An explicit switch controlling whether the Signal Generator is actively emitting
 The system audio output the Signal Generator plays through. Same shape and same disconnect behavior as Input Device (own selector, no silent fallback — the generator stops and shows disconnected rather than risk playing a test tone out of an unintended output). See ADR 0006.
 
 **Time Averaging**:
-A post-FFT stage that blends level across consecutive frames (Fast/Slow presets) to control how quickly a view's displayed value responds, independent of FFT window size or frequency resolution. Selected per-view, not globally — the Anomaly Candidate detector is fixed to Fast (never user-selectable, since catching a building ring requires fast response); other views may offer Fast/Slow as a user choice.
+A post-FFT stage that blends level across consecutive frames (Fast/Slow presets) to control how quickly a view's displayed value responds, independent of FFT window size or frequency resolution. Meant to be selected per-view eventually; the single control implemented so far (ticket #7's Controls row toggle) currently drives Tracked Frequency, the waterfall, and the RTA together, not yet split per-view. The Anomaly Candidate detector is fixed to Fast regardless (never user-selectable, since catching a building ring requires fast response) and reads the raw, unblended spectrum directly.
 _Avoid_: Smoothing (ambiguous with Octave Smoothing — always specify which)
 
 **Octave Smoothing**:
