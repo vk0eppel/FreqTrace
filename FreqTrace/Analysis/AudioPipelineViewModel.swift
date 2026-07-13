@@ -17,6 +17,7 @@
 //  Frequency.
 //
 
+import CoreAudio
 import Foundation
 import Observation
 
@@ -37,7 +38,23 @@ final class AudioPipelineViewModel {
     /// Arbitrary but generous headroom for the offset field -- no
     /// calibration workflow exists yet to derive a "correct" range from.
     static let splOffsetRangeDb: ClosedRange<Double> = -60...60
-    private(set) var isCaptureActive = false
+
+    /// Input devices currently exposing at least one input stream
+    /// (CONTEXT.md "Input Device"), refreshed on start() and whenever Core
+    /// Audio reports the device list changed.
+    private(set) var availableInputDevices: [AudioDevice] = []
+    /// The Input Device picker's current selection -- see
+    /// CaptureConnectionState for whether it's actually running.
+    private(set) var selectedInputDeviceID: String?
+    /// Drives the disconnected indicator (ticket #4, ADR 0006): the active
+    /// device disappearing transitions this to `.disconnected` rather than
+    /// silently reassigning to a different device.
+    private(set) var connectionState: CaptureConnectionState = .stopped
+
+    var isCaptureActive: Bool {
+        if case .running = connectionState { return true }
+        return false
+    }
 
     var weighting: Weighting = .default {
         didSet {
@@ -54,7 +71,12 @@ final class AudioPipelineViewModel {
     private let ringBuffer: AudioRingBuffer
     private let pipeline: AudioAnalysisPipeline
     private let captureEngine: MicrophoneCaptureEngine
+    private let deviceEnumerator = AudioDeviceEnumerator(scope: .input)
     private var streamTask: Task<Void, Never>?
+
+    /// Persists the tech's last explicit Input Device choice across
+    /// launches (CONTEXT.md "Input Device").
+    private static let persistedDeviceIDDefaultsKey = "FreqTrace.selectedInputDeviceID"
 
     init(config: AnalysisConfig = .default) {
         self.config = config
@@ -68,22 +90,65 @@ final class AudioPipelineViewModel {
         self.captureEngine = MicrophoneCaptureEngine(ringBuffer: ringBuffer)
     }
 
-    /// Starts capturing from the system default input device and streaming
-    /// analysis updates. Safe to call multiple times; a no-op once already
-    /// running.
+    /// Starts capturing and streaming analysis updates. Resolves which
+    /// input device to use (InputDeviceSelector) from the persisted last
+    /// explicit choice, falling back to the system default. Safe to call
+    /// multiple times; a no-op once already running.
     func start() {
         guard !isCaptureActive else { return }
-        do {
-            try captureEngine.start()
-        } catch {
-            // No hardware/permission in this environment (or denied by the
-            // user) -- readouts simply stay at their placeholder state. A
-            // future ticket may surface this as an explicit disconnected
-            // indicator (see ADR 0006 for the equivalent Input Device
-            // disconnect behavior).
+
+        deviceEnumerator.onChange = { [weak self] in self?.refreshAvailableDevices() }
+        deviceEnumerator.startObserving()
+        refreshAvailableDevices()
+
+        guard let deviceID = InputDeviceSelector.resolve(
+            availableDevices: availableInputDevices,
+            persistedDeviceID: UserDefaults.standard.string(forKey: Self.persistedDeviceIDDefaultsKey),
+            systemDefaultDeviceID: deviceEnumerator.systemDefaultDeviceID()
+        ) else {
+            // No input devices available at all -- stay stopped.
             return
         }
-        isCaptureActive = true
+        startCapture(deviceID: deviceID, persistChoice: false)
+    }
+
+    /// Explicit device selection from the Input Device picker (or a
+    /// reconnect from the disconnected state): always (re)starts capture at
+    /// the chosen device and persists it as the new last explicit choice.
+    func selectInputDevice(id: String) {
+        startCapture(deviceID: id, persistChoice: true)
+    }
+
+    func stop() {
+        streamTask?.cancel()
+        streamTask = nil
+        captureEngine.stop()
+        connectionState = connectionState.stopping()
+        trackedFrequencyHz = nil
+        latestMagnitudes = []
+        splDb = nil
+    }
+
+    private func startCapture(deviceID: String, persistChoice: Bool) {
+        streamTask?.cancel()
+        captureEngine.stop()
+
+        if persistChoice {
+            UserDefaults.standard.set(deviceID, forKey: Self.persistedDeviceIDDefaultsKey)
+        }
+        selectedInputDeviceID = deviceID
+
+        do {
+            let coreAudioDeviceID = deviceEnumerator.deviceID(forUID: deviceID)
+            try captureEngine.start(deviceID: coreAudioDeviceID)
+        } catch {
+            // No hardware/permission in this environment (or denied by the
+            // user) -- readouts simply stay at their placeholder state.
+            return
+        }
+        connectionState = connectionState.selecting(deviceID: deviceID)
+
+        captureEngine.onConfigurationChange = { [weak self] in self?.handleConfigurationChange() }
 
         let pipeline = pipeline
         streamTask = Task { [weak self] in
@@ -97,11 +162,23 @@ final class AudioPipelineViewModel {
         }
     }
 
-    func stop() {
+    private func refreshAvailableDevices() {
+        availableInputDevices = deviceEnumerator.availableDevices()
+        connectionState = connectionState.handlingDeviceListChange(availableDeviceIDs: Set(availableInputDevices.map(\.id)))
+        if case .disconnected = connectionState {
+            handleConfigurationChange()
+        }
+    }
+
+    /// Called when AVAudioEngine reports its I/O configuration changed
+    /// (notably: the active device disappeared) -- stops the live pipeline
+    /// (ADR 0006: no silent fallback) while leaving `connectionState` for
+    /// the UI to already reflect `.disconnected` via refreshAvailableDevices.
+    private func handleConfigurationChange() {
+        guard case .disconnected = connectionState else { return }
         streamTask?.cancel()
         streamTask = nil
         captureEngine.stop()
-        isCaptureActive = false
         trackedFrequencyHz = nil
         latestMagnitudes = []
         splDb = nil

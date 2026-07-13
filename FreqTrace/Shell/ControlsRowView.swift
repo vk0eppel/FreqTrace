@@ -6,9 +6,9 @@
 //  Line 1 -- Weighting (live, ticket #3), Time Averaging, Peak/Freeze/Stop,
 //  Signal Generator (live, ticket #9). SPL Offset lives in the Measured
 //  Data row's SPL block instead (ticket #6), alongside the reading it
-//  offsets, not here. Line 2 -- Input Device (left), Appearance Mode
-//  (center), Output Device (right). Remaining groups are still placeholders
-//  pending their own tickets.
+//  offsets, not here. Line 2 -- Input Device (live, ticket #4), Appearance
+//  Mode (center), Output Device (right). Remaining groups are still
+//  placeholders pending their own tickets.
 //
 
 import SwiftUI
@@ -47,7 +47,7 @@ struct ControlsRowView: View {
         // width) -- side groups get equal flexible width via .frame, and
         // "Appearance" is centered as an overlay independent of their content.
         HStack(spacing: 0) {
-            placeholderGroup("Input Device")
+            inputDeviceControl
                 .frame(maxWidth: .infinity, alignment: .leading)
             placeholderGroup("Output Device")
                 .frame(maxWidth: .infinity, alignment: .trailing)
@@ -57,6 +57,48 @@ struct ControlsRowView: View {
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
+    }
+
+    // The Input Device control (ticket #4, CONTEXT.md "Input Device"): a
+    // picker over Core Audio's currently available input devices, plus an
+    // unmistakable disconnected indicator when the active device
+    // disappears mid-use (ADR 0006 -- never a silent fallback). Selecting a
+    // device here, including from the disconnected state, re-points the
+    // live pipeline and persists the choice as the new default.
+    private var inputDeviceControl: some View {
+        HStack(spacing: 6) {
+            Text("INPUT")
+                .font(.system(size: Typography.controlSize, weight: .medium))
+                .foregroundStyle(theme.textDim)
+
+            Menu {
+                ForEach(trackedFrequencyViewModel.availableInputDevices) { device in
+                    Button(device.name) {
+                        trackedFrequencyViewModel.selectInputDevice(id: device.id)
+                    }
+                }
+            } label: {
+                Text(selectedInputDeviceName)
+                    .font(.system(size: Typography.controlSize, weight: .medium))
+                    .lineLimit(1)
+            }
+            .fixedSize()
+
+            if case .disconnected = trackedFrequencyViewModel.connectionState {
+                Text("DISCONNECTED")
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(theme.danger)
+            }
+        }
+        .padding(.horizontal, 18)
+    }
+
+    private var selectedInputDeviceName: String {
+        guard let id = trackedFrequencyViewModel.selectedInputDeviceID,
+              let device = trackedFrequencyViewModel.availableInputDevices.first(where: { $0.id == id }) else {
+            return "No Input Device"
+        }
+        return device.name
     }
 
     private func placeholderGroup(_ label: String) -> some View {
