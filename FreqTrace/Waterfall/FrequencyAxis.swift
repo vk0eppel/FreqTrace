@@ -36,15 +36,20 @@ enum FrequencyAxis {
         let label: String
     }
 
-    /// The bands CLAUDE.md specifies: "labeled at meaningful bands (100,
-    /// 200, 500, 1k, 2k, 5k, 10k), not raw FFT bins."
+    /// Standard octave-band series, 20Hz-20kHz (revised from ticket #8's
+    /// original coarser set per user request): "labeled at meaningful
+    /// bands, not raw FFT bins," now matching the octave spacing real
+    /// analyzers use.
     static let labeledBands: [Band] = [
-        Band(hz: 100, label: "100"),
-        Band(hz: 200, label: "200"),
+        Band(hz: 31.5, label: "31.5"),
+        Band(hz: 63, label: "63"),
+        Band(hz: 125, label: "125"),
+        Band(hz: 250, label: "250"),
         Band(hz: 500, label: "500"),
         Band(hz: 1000, label: "1k"),
         Band(hz: 2000, label: "2k"),
-        Band(hz: 5000, label: "5k"),
-        Band(hz: 10_000, label: "10k"),
+        Band(hz: 4000, label: "4k"),
+        Band(hz: 8000, label: "8k"),
+        Band(hz: 16_000, label: "16k"),
     ]
 }

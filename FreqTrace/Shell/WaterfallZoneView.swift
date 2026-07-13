@@ -95,16 +95,22 @@ struct WaterfallZoneView: View {
         .buttonStyle(.plain)
     }
 
+    // Axis legibility (user report: "not visible enough"): each label now
+    // sits on its own backdrop pill so it reads clearly against any
+    // waterfall/RTA color underneath, rather than bare low-opacity text
+    // that could disappear into similarly-colored pixels. A faint gridline
+    // at full opacity-independent low alpha marks the exact position, not
+    // just an approximate label placement.
     private var frequencyAxisLabels: some View {
         GeometryReader { proxy in
             ForEach(FrequencyAxis.labeledBands, id: \.hz) { band in
-                Text(band.label)
-                    .font(.system(size: Typography.axisLabelSize, weight: .regular, design: .monospaced))
-                    .foregroundStyle(theme.text.opacity(0.55))
-                    .position(
-                        x: proxy.size.width * FrequencyAxis.normalizedPosition(forHz: band.hz),
-                        y: proxy.size.height - 10
-                    )
+                let x = proxy.size.width * FrequencyAxis.normalizedPosition(forHz: band.hz)
+                Rectangle()
+                    .fill(theme.text.opacity(0.12))
+                    .frame(width: 1)
+                    .position(x: x, y: proxy.size.height / 2)
+                axisLabel(band.label)
+                    .position(x: x, y: proxy.size.height - 12)
             }
         }
     }
@@ -112,15 +118,27 @@ struct WaterfallZoneView: View {
     private var timeAxisLabels: some View {
         GeometryReader { proxy in
             ForEach(gridlines, id: \.secondsAgo) { gridline in
-                Text(gridline.secondsAgo == 0 ? "now" : "\u{2212}\(Int(gridline.secondsAgo))s")
-                    .font(.system(size: Typography.axisLabelSize, weight: .regular, design: .monospaced))
-                    .foregroundStyle(theme.text.opacity(0.55))
-                    .position(
-                        x: 22,
-                        y: proxy.size.height * (1 - gridline.normalizedPosition)
-                    )
+                let y = proxy.size.height * (1 - gridline.normalizedPosition)
+                Rectangle()
+                    .fill(theme.text.opacity(0.12))
+                    .frame(height: 1)
+                    .position(x: proxy.size.width / 2, y: y)
+                axisLabel(gridline.secondsAgo == 0 ? "now" : "\u{2212}\(Int(gridline.secondsAgo))s")
+                    .position(x: 26, y: y)
             }
         }
+    }
+
+    private func axisLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
+            .foregroundStyle(theme.text.opacity(0.9))
+            .padding(.horizontal, 4)
+            .padding(.vertical, 1)
+            .background(
+                RoundedRectangle(cornerRadius: 3)
+                    .fill(theme.bg.opacity(0.7))
+            )
     }
 }
 

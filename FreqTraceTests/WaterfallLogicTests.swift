@@ -51,10 +51,10 @@ struct FrequencyAxisTests {
     }
 
     @Test func labeledBandsMatchTheSpec() {
-        // Ticket #8: "labeled at meaningful bands (100, 200, 500, 1k, 2k,
-        // 5k, 10k), not raw FFT bins."
+        // Standard octave-band series, 20Hz-20kHz (user-requested
+        // revision, superseding ticket #8's original coarser set).
         let labels = FrequencyAxis.labeledBands.map(\.label)
-        #expect(labels == ["100", "200", "500", "1k", "2k", "5k", "10k"])
+        #expect(labels == ["31.5", "63", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"])
     }
 
     @Test func labeledBandsAreInAscendingOrder() {
