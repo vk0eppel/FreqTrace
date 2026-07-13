@@ -63,10 +63,11 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
 
 ## Architecture
 
-- **Pipeline**: Capture → FFT → Tracking → Rendering, one shared pipeline feeding all analysis views (ADR 0002). Capture stage (AVAudioEngine tap) does minimal work on the real-time audio thread, copying into a lock-free ring buffer. FFT + tracking run on a background actor. Results are published via `AsyncStream` to a `@MainActor` `@Observable` view model (see conversation/ADR context — formalize as ADR if not already captured).
-- **FFT parameters**: 4096-sample window, 50% overlap (2048 hop), target 48kHz — configurable, not hardcoded (sample rate/window/hop should be settable later).
+- **Pipeline**: Capture → FFT → Tracking → Rendering, one shared pipeline feeding all analysis views (ADR 0002). Capture stage (AVAudioEngine tap) does minimal work on the real-time audio thread, copying into a lock-free ring buffer (`AudioRingBuffer`, single-writer-per-atomic SPSC discipline — see its header comment for a real race that was found and fixed by code review). FFT + tracking run on a background actor (`AudioAnalysisPipeline`). Results are published via `AsyncStream` to a `@MainActor` `@Observable` view model (`TrackedFrequencyViewModel`) — implemented in ticket #3, not yet split into its own ADR.
+- **FFT parameters**: 4096-sample window, 50% overlap (2048 hop), target 48kHz — configurable via `AnalysisConfig`, not hardcoded. **Known gap**: `MicrophoneCaptureEngine` reports the actual hardware input sample rate (often 44.1kHz, not 48kHz), but the pipeline doesn't yet reconfigure `AnalysisConfig` to match if it differs from the default — frequency readings could be slightly off on hardware that doesn't run at 48kHz. Worth a follow-up ticket.
+- **Weighting**: applied in the power domain (dB/10, not dB/20) since `vDSP_zvmags` returns squared magnitude — a detail worth knowing if the weighting math is ever touched.
 - **Rendering**: waterfall uses Metal (ADR 0004).
-- Signal Generator is on the output/playback side, independent of the capture pipeline.
+- **Signal Generator**: fully separate `AVAudioEngine` instance from the capture pipeline (confirms the independence ADR 0002 assumed). Sine frequency is currently fixed at 1000Hz with no control yet — the ISO Band frequency stepper is ticket #14, not #9. Level range is `-96...0` dB, default `-66` dB (not specified anywhere before implementation; recorded here now). Pink noise uses Voss-McCartney (16 rows + white component).
 - Module layout per feature not yet decided.
 
 ## Frontend
