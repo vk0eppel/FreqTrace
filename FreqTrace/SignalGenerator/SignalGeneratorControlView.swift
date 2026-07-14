@@ -30,7 +30,11 @@ struct SignalGeneratorControlView: View {
                 sineFrequencyControl
             }
 
-            NumericValueField(value: $engine.levelDB, range: SignalGeneratorEngine.levelRangeDB)
+            // Narrower than NumericValueField's default width (64pt, sized
+            // for other fields' wider ranges) -- levelRangeDB tops out at
+            // "-96dB" (5 chars), so the box only needs to fit that (user
+            // report: box was wider than the value it holds).
+            NumericValueField(value: $engine.levelDB, range: SignalGeneratorEngine.levelRangeDB, width: 46)
 
             // Native Toggle per CONTEXT.md -- a real, explicit switch, not
             // a passive status dot: flipping it must actually start/stop
