@@ -15,6 +15,7 @@
 //  specifically").
 //
 
+import MetalKit
 import SwiftUI
 
 enum GraphDisplayMode: String, CaseIterable, Identifiable {
@@ -28,6 +29,15 @@ struct WaterfallZoneView: View {
     @Environment(\.theme) private var theme
     @Environment(AudioPipelineViewModel.self) private var pipeline
     @State private var displayMode: GraphDisplayMode = .waterfall
+    /// Owned here rather than inside MetalWaterfallView's makeCoordinator()
+    /// (hover tooltip feature) so hoverReadout(at:size:) can query the same
+    /// instance's magnitudeDb(secondsAgo:hz:) that's writing the GPU
+    /// texture -- constructed once on first appearance since MTLDevice
+    /// creation/pipeline setup shouldn't repeat on every body evaluation.
+    @State private var waterfallRenderer: WaterfallRenderer?
+    /// Cursor position within the zone's own coordinate space, nil when the
+    /// mouse isn't over it -- drives the hover tooltip below.
+    @State private var hoverPoint: CGPoint?
 
     private var historyDurationSeconds: Double {
         WaterfallHistoryBuffer(config: pipeline.config).historyDurationSeconds
@@ -41,11 +51,14 @@ struct WaterfallZoneView: View {
         ZStack {
             switch displayMode {
             case .waterfall:
-                MetalWaterfallView(
-                    magnitudes: pipeline.latestMagnitudes, config: pipeline.config,
-                    appearanceMode: theme.mode, fullScalePower: pipeline.fullScalePower,
-                    bandingResolution: pipeline.bandingResolution
-                )
+                if let waterfallRenderer {
+                    MetalWaterfallView(
+                        renderer: waterfallRenderer,
+                        magnitudes: pipeline.latestMagnitudes, config: pipeline.config,
+                        appearanceMode: theme.mode, fullScalePower: pipeline.fullScalePower,
+                        bandingResolution: pipeline.bandingResolution
+                    )
+                }
                 frequencyAxisLabels
                 timeAxisLabels
             case .rta:
@@ -53,11 +66,105 @@ struct WaterfallZoneView: View {
                 frequencyAxisLabels
                 dbAxisLabels
             }
+            hoverOverlay
             displayModeToggle
             bandingResolutionControl
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .onAppear {
+            guard waterfallRenderer == nil, let device = MTLCreateSystemDefaultDevice() else { return }
+            waterfallRenderer = WaterfallRenderer(device: device, config: pipeline.config)
+        }
+    }
+
+    // Mouse-over exact-value readout (user request: "Mouse over waterfall
+    // or rta should indicate the exact scale values") -- the axis
+    // gridlines are necessarily coarse (fixed octave bands, 5dB steps), so
+    // a tech pointing at an arbitrary spot gets the precise Hz + dB there
+    // instead of eyeballing against the nearest label. Works live, no
+    // Freeze required (confirmed with user) -- Freeze already gates
+    // pipeline.latestMagnitudes/frozen waterfall rows upstream, so this
+    // needs no special-casing either way.
+    private var hoverOverlay: some View {
+        GeometryReader { proxy in
+            Color.clear
+                .contentShape(Rectangle())
+                .onContinuousHover { phase in
+                    switch phase {
+                    case .active(let location):
+                        hoverPoint = location
+                    case .ended:
+                        hoverPoint = nil
+                    }
+                }
+            if let hoverPoint, let readout = hoverReadout(at: hoverPoint, size: proxy.size) {
+                hoverTooltip(readout, near: hoverPoint, in: proxy.size)
+            }
+        }
+    }
+
+    private struct HoverReadout {
+        let hz: Double
+        /// nil when there's nothing to report yet at this point (e.g. a
+        /// waterfall row not written yet) -- shown as frequency-only, no
+        /// placeholder dash, matching how the rest of the app omits
+        /// nothing-to-show state rather than faking a value.
+        let db: Float?
+    }
+
+    private func hoverReadout(at point: CGPoint, size: CGSize) -> HoverReadout? {
+        guard size.width > 0, size.height > 0 else { return nil }
+        let hz = FrequencyAxis.hz(atNormalizedPosition: Double(point.x / size.width))
+
+        switch displayMode {
+        case .waterfall:
+            guard let waterfallRenderer else { return HoverReadout(hz: hz, db: nil) }
+            // Inverse of timeAxisLabels' own topInset/bottomInset mapping,
+            // so the tooltip's time position matches the gridlines exactly.
+            let topInset: CGFloat = 12
+            let bottomInset: CGFloat = 28
+            let usableHeight = size.height - topInset - bottomInset
+            guard usableHeight > 0 else { return HoverReadout(hz: hz, db: nil) }
+            let normalizedPosition = min(max(1 - Double((point.y - topInset) / usableHeight), 0), 1)
+            let secondsAgo = normalizedPosition * historyDurationSeconds
+            return HoverReadout(hz: hz, db: waterfallRenderer.magnitudeDb(secondsAgo: secondsAgo, hz: hz))
+        case .rta:
+            let barsPerOctave = pipeline.bandingResolution.rawValue
+            let bars = RTABinning.bars(
+                magnitudes: pipeline.latestMagnitudes, config: pipeline.config,
+                barsPerOctave: barsPerOctave, fullScalePower: pipeline.fullScalePower
+            )
+            guard !bars.isEmpty else { return HoverReadout(hz: hz, db: nil) }
+            let edges = RTABinning.bandEdges(barsPerOctave: barsPerOctave)
+            guard let index = edges.firstIndex(where: { hz >= $0.lowerHz && hz <= $0.upperHz }) else {
+                return HoverReadout(hz: hz, db: nil)
+            }
+            return HoverReadout(hz: hz, db: MagnitudeScaling.dB(fromNormalized: bars[index]))
+        }
+    }
+
+    private func hoverTooltip(_ readout: HoverReadout, near point: CGPoint, in size: CGSize) -> some View {
+        let width: CGFloat = 130
+        let height: CGFloat = 20
+        let x = min(max(point.x + 14 + width / 2, width / 2 + 4), size.width - width / 2 - 4)
+        let y = min(max(point.y - 14, height / 2 + 4), size.height - height / 2 - 4)
+        return axisLabel(hoverText(readout))
+            .position(x: x, y: y)
+            .allowsHitTesting(false)
+    }
+
+    private func hoverText(_ readout: HoverReadout) -> String {
+        let freq = formattedHoverFrequency(readout.hz)
+        guard let db = readout.db else { return freq }
+        return "\(freq)  \(Int(db.rounded())) dB"
+    }
+
+    // Whole Hz below 1kHz, kHz above -- same convention
+    // MeasuredDataRowView.formattedAnomalyFrequency already uses for
+    // Anomaly Candidate rows.
+    private func formattedHoverFrequency(_ hz: Double) -> String {
+        hz >= 1000 ? String(format: "%.2f kHz", hz / 1000) : String(format: "%.0f Hz", hz)
     }
 
     private var displayModeToggle: some View {
@@ -191,12 +298,12 @@ struct WaterfallZoneView: View {
     // too") -- RTA has no time history (a single live frame), so unlike the
     // waterfall this side of the graph is otherwise unused, and the same
     // left-edge position timeAxisLabels uses for the waterfall is free
-    // here. Levels mirror RTABinning/MagnitudeScaling's -80…0dB normalized
+    // here. Levels mirror RTABinning/MagnitudeScaling's -120…0dB normalized
     // range (the same range each bar's height is computed from), so a bar
     // reaching the "-20 dB" gridline really is -20dB. Same top/bottom inset
     // approach as timeAxisLabels, for the same reason (avoid clipping the
     // top label and colliding with the frequency axis's bottom row).
-    private static let dbGridlineLevels: [Float] = [0, -20, -40, -60, -80]
+    private static let dbGridlineLevels: [Float] = [0, -20, -40, -60, -80, -100, -120]
 
     private var dbAxisLabels: some View {
         GeometryReader { proxy in

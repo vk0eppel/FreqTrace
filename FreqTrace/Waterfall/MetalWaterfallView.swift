@@ -14,6 +14,12 @@ import MetalKit
 import SwiftUI
 
 struct MetalWaterfallView: NSViewRepresentable {
+    /// Owned by WaterfallZoneView, not created here (hover tooltip feature):
+    /// WaterfallZoneView needs the same renderer instance to query
+    /// magnitudeDb(secondsAgo:hz:) for its hover overlay, which isn't
+    /// possible if this view's own makeCoordinator() is the only thing
+    /// that ever constructs one.
+    let renderer: WaterfallRenderer
     let magnitudes: [Float]
     let config: AnalysisConfig
     /// Ticket #10: selects which of WaterfallColorMap's ramps the GPU
@@ -31,9 +37,8 @@ struct MetalWaterfallView: NSViewRepresentable {
     /// none of the Metal-side remap math or texture sizing needs to change.
     var bandingResolution: RTABandingResolution = .oneOverTwelve
 
-    func makeCoordinator() -> WaterfallRenderer? {
-        guard let device = MTLCreateSystemDefaultDevice() else { return nil }
-        return WaterfallRenderer(device: device, config: config)
+    func makeCoordinator() -> WaterfallRenderer {
+        renderer
     }
 
     func makeNSView(context: Context) -> MTKView {
@@ -49,9 +54,9 @@ struct MetalWaterfallView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: MTKView, context: Context) {
-        context.coordinator?.setAppearanceMode(appearanceMode)
+        context.coordinator.setAppearanceMode(appearanceMode)
         guard !magnitudes.isEmpty else { return }
         let stepped = RTABinning.steppedMagnitudes(magnitudes: magnitudes, config: config, barsPerOctave: bandingResolution.rawValue)
-        context.coordinator?.pushMagnitudes(stepped, fullScalePower: fullScalePower)
+        context.coordinator.pushMagnitudes(stepped, fullScalePower: fullScalePower)
     }
 }

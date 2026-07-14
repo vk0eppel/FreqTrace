@@ -51,6 +51,31 @@ struct WaterfallHistoryBuffer {
         Float(writeIndex % rowCount) / Float(rowCount)
     }
 
+    /// Inverse of the row bookkeeping above (hover tooltip feature): which
+    /// texture row holds the frame from `secondsAgo` seconds ago. writeIndex
+    /// - 1 is the most recently written row ("now"); stepping back by whole
+    /// hops and wrapping within [0, rowCount) mirrors nextRowIndex()'s own
+    /// circular-buffer math. Clamped to the buffer's own history -- callers
+    /// asking for a time further back than historyDurationSeconds get the
+    /// oldest row still held, not an out-of-range index.
+    func rowIndex(secondsAgo: Double) -> Int {
+        Self.rowIndex(secondsAgo: secondsAgo, writeIndex: writeIndex, rowCount: rowCount, historyDurationSeconds: historyDurationSeconds)
+    }
+
+    /// Static variant of `rowIndex(secondsAgo:)` taking `writeIndex` as a
+    /// parameter rather than reading `self`: WaterfallRenderer's hover
+    /// query runs on a different thread than the one mutating `writeIndex`
+    /// (see its header comment on pendingMagnitudes' cross-thread handoff),
+    /// so it snapshots writeIndex under its own lock and calls this instead
+    /// of touching a live WaterfallHistoryBuffer instance from that thread.
+    static func rowIndex(secondsAgo: Double, writeIndex: Int, rowCount: Int, historyDurationSeconds: Double) -> Int {
+        guard rowCount > 0 else { return 0 }
+        let hopDurationSeconds = historyDurationSeconds / Double(rowCount)
+        let maxHopsAgo = rowCount - 1
+        let hopsAgo = min(max(Int((secondsAgo / hopDurationSeconds).rounded()), 0), maxHopsAgo)
+        return ((writeIndex - 1 - hopsAgo) % rowCount + rowCount) % rowCount
+    }
+
     struct Gridline {
         let secondsAgo: Double
         let normalizedPosition: Double

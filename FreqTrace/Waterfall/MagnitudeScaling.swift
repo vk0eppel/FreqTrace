@@ -10,7 +10,11 @@
 import Foundation
 
 enum MagnitudeScaling {
-    static let floorDb: Float = -80
+    // -120dB (user request, was -80dB) -- matches decibels(power:)'s own
+    // 1e-12 floor (10*log10(1e-12) = -120dB exactly), so true silence
+    // clamps at the same point normalized(power:) does, rather than the
+    // decibels floor sitting below where normalization actually clips.
+    static let floorDb: Float = -120
     static let ceilingDb: Float = 0
 
     /// Power magnitude -> decibels (10*log10, since vDSP_zvmags' output is
@@ -26,5 +30,14 @@ enum MagnitudeScaling {
     static func normalized(power: Float, floorDb: Float = Self.floorDb, ceilingDb: Float = Self.ceilingDb) -> Float {
         let clamped = min(max(decibels(power: power), floorDb), ceilingDb)
         return (clamped - floorDb) / (ceilingDb - floorDb)
+    }
+
+    /// Inverse of `normalized(power:)` (hover tooltip feature): recovers a
+    /// dB value from a stored [0,1] value. This reconstructs dB relative to
+    /// whatever `fullScalePower` the original normalization divided by
+    /// (i.e. dBFS), not raw unreferenced power -- same caveat as
+    /// `normalized(power:)` itself.
+    static func dB(fromNormalized normalized: Float, floorDb: Float = Self.floorDb, ceilingDb: Float = Self.ceilingDb) -> Float {
+        floorDb + normalized * (ceilingDb - floorDb)
     }
 }

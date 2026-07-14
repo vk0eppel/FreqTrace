@@ -42,6 +42,16 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
 
     private let lock = OSAllocatedUnfairLock<(magnitudes: [Float], fullScalePower: Float)?>(initialState: nil)
     private var historyBuffer: WaterfallHistoryBuffer
+    /// CPU-side mirror of the GPU texture rows (hover tooltip feature): the
+    /// GPU texture itself can't cheaply be read back per-pixel from the
+    /// hover gesture's thread, so writeRow also stores its already-computed
+    /// `normalized` array here, under the same kind of cross-thread lock
+    /// pendingMagnitudes uses -- writes happen from draw(in:)'s thread,
+    /// reads happen from magnitudeDb(secondsAgo:hz:), called from the main
+    /// actor's hover handling.
+    private let historyLock: OSAllocatedUnfairLock<(store: WaterfallHistoryStore, writeIndex: Int)>
+    private let historyRowCount: Int
+    private let historyDurationSeconds: Double
     /// Ticket #10: written from the main actor (MetalWaterfallView.
     /// updateNSView), read from draw(in:) (not guaranteed main thread) --
     /// an OSAllocatedUnfairLock-guarded flag, same cross-thread handoff
@@ -82,6 +92,12 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
         self.texture = texture
         self.config = config
         self.historyBuffer = historyBuffer
+        self.historyRowCount = historyBuffer.rowCount
+        self.historyDurationSeconds = historyBuffer.historyDurationSeconds
+        self.historyLock = OSAllocatedUnfairLock(initialState: (
+            store: WaterfallHistoryStore(rowCount: historyBuffer.rowCount, columnCount: historyBuffer.columnCount),
+            writeIndex: 0
+        ))
     }
 
     /// Real-time-safe-ish (a lock, not lock-free, but the critical section
@@ -158,6 +174,35 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
                 withBytes: pointer.baseAddress!,
                 bytesPerRow: historyBuffer.columnCount * MemoryLayout<Float>.stride
             )
+        }
+
+        let writeIndex = historyBuffer.writeIndex
+        historyLock.withLock { state in
+            state.store.write(row: row, values: normalized)
+            state.writeIndex = writeIndex
+        }
+    }
+
+    /// Hover tooltip query (main actor, called from WaterfallZoneView's
+    /// hover handling -- a different thread than writeRow's, hence the
+    /// lock): the dB level at `hz` in the frame from `secondsAgo` seconds
+    /// ago, or nil if that row hasn't been written yet. `hz` is converted
+    /// to a column using the same linear bin-Hz formula RTABinning uses
+    /// (config.sampleRate/windowSize) -- texture columns are raw FFT bins,
+    /// not log-frequency-spaced; the log remap only happens per-pixel in
+    /// the fragment shader.
+    func magnitudeDb(secondsAgo: Double, hz: Double) -> Float? {
+        let binHz = config.sampleRate / Double(config.windowSize)
+        let column = min(max(Int((hz / binHz).rounded()), 0), historyBuffer.columnCount - 1)
+        return historyLock.withLock { state in
+            let row = WaterfallHistoryBuffer.rowIndex(
+                secondsAgo: secondsAgo,
+                writeIndex: state.writeIndex,
+                rowCount: historyRowCount,
+                historyDurationSeconds: historyDurationSeconds
+            )
+            guard let normalized = state.store.value(row: row, column: column) else { return nil }
+            return MagnitudeScaling.dB(fromNormalized: normalized)
         }
     }
 }

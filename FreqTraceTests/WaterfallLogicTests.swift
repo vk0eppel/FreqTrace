@@ -131,6 +131,22 @@ struct MagnitudeScalingTests {
         // range the color map expects.
         #expect(MagnitudeScaling.normalized(power: 100) == 1.0)
     }
+
+    @Test func dBFromNormalizedRoundTripsWithNormalizedPower() {
+        // Hover tooltip feature: dB(fromNormalized:) recovers the dB value
+        // normalized(power:) started from (within the clamp range).
+        for power: Float in [1e-8, 1e-6, 1e-4, 0.01, 0.1, 1.0] {
+            let db = MagnitudeScaling.decibels(power: power)
+            let normalized = MagnitudeScaling.normalized(power: power)
+            let recovered = MagnitudeScaling.dB(fromNormalized: normalized)
+            #expect(abs(recovered - db) < 0.01)
+        }
+    }
+
+    @Test func dBFromNormalizedEndpointsMatchFloorAndCeiling() {
+        #expect(MagnitudeScaling.dB(fromNormalized: 0) == MagnitudeScaling.floorDb)
+        #expect(MagnitudeScaling.dB(fromNormalized: 1) == MagnitudeScaling.ceilingDb)
+    }
 }
 
 struct WaterfallHistoryBufferTests {
@@ -177,5 +193,58 @@ struct WaterfallHistoryBufferTests {
     @Test func gridlineNormalizedPositionsAreFractionOfHistory() {
         let gridlines = WaterfallHistoryBuffer.gridlines(historyDurationSeconds: 20, intervalSeconds: 5)
         #expect(gridlines.map(\.normalizedPosition) == [0, 0.25, 0.5, 0.75, 1.0])
+    }
+
+    @Test func rowIndexAtZeroSecondsAgoIsTheMostRecentlyWrittenRow() {
+        // Hover tooltip feature: secondsAgo=0 ("now") should resolve to
+        // the same row nextRowIndex() most recently handed out.
+        var buffer = WaterfallHistoryBuffer(config: .default)
+        let lastWritten = buffer.nextRowIndex()
+        #expect(buffer.rowIndex(secondsAgo: 0) == lastWritten)
+    }
+
+    @Test func rowIndexStepsBackOneHopPerHopDuration() {
+        var buffer = WaterfallHistoryBuffer(config: .default)
+        _ = buffer.nextRowIndex()
+        let secondRow = buffer.nextRowIndex()
+        let hopDurationSeconds = buffer.historyDurationSeconds / Double(buffer.rowCount)
+        #expect(buffer.rowIndex(secondsAgo: 0) == secondRow)
+        #expect(buffer.rowIndex(secondsAgo: hopDurationSeconds) == secondRow - 1)
+    }
+
+    @Test func rowIndexClampsToOldestRowRatherThanGoingOutOfRange() {
+        var buffer = WaterfallHistoryBuffer(config: .default)
+        _ = buffer.nextRowIndex()
+        let farInThePast = buffer.rowIndex(secondsAgo: buffer.historyDurationSeconds * 10)
+        #expect(farInThePast >= 0 && farInThePast < buffer.rowCount)
+    }
+}
+
+struct WaterfallHistoryStoreTests {
+
+    @Test func returnsWrittenValueAtItsRowAndColumn() {
+        var store = WaterfallHistoryStore(rowCount: 4, columnCount: 3)
+        store.write(row: 2, values: [0.1, 0.2, 0.3])
+        #expect(store.value(row: 2, column: 1) == 0.2)
+    }
+
+    @Test func returnsNilForAnUnwrittenRow() {
+        let store = WaterfallHistoryStore(rowCount: 4, columnCount: 3)
+        #expect(store.value(row: 0, column: 0) == nil)
+    }
+
+    @Test func returnsNilForOutOfRangeRowOrColumn() {
+        var store = WaterfallHistoryStore(rowCount: 4, columnCount: 3)
+        store.write(row: 0, values: [0.1, 0.2, 0.3])
+        #expect(store.value(row: -1, column: 0) == nil)
+        #expect(store.value(row: 4, column: 0) == nil)
+        #expect(store.value(row: 0, column: 3) == nil)
+    }
+
+    @Test func laterWriteToSameRowOverwritesEarlierOne() {
+        var store = WaterfallHistoryStore(rowCount: 2, columnCount: 2)
+        store.write(row: 0, values: [0.1, 0.1])
+        store.write(row: 0, values: [0.9, 0.9])
+        #expect(store.value(row: 0, column: 0) == 0.9)
     }
 }
