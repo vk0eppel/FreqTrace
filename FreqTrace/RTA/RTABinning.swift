@@ -11,9 +11,31 @@
 //
 
 import Foundation
+import os
 
 enum RTABinning {
     static let defaultBarsPerOctave = 12
+
+    /// Memoizes bandEdges(barsPerOctave:) (perf fix -- user request "reduce
+    /// CPU charge"): it's pure and only ever changes when the user picks a
+    /// different RTABandingResolution, but was recomputed with fresh array
+    /// allocations on every single hop from three separate call sites --
+    /// AudioPipelineViewModel.apply's continuous peak tracking, RTAView's
+    /// per-frame Canvas render, and WaterfallZoneView's hover overlay --
+    /// none of which share a common caller. A lock-guarded cache (same
+    /// OSAllocatedUnfairLock pattern WaterfallRenderer already uses for
+    /// cross-thread state) rather than a plain static var, since this enum
+    /// has no actor isolation of its own and its callers span multiple
+    /// actors/threads. Stays small -- at most one entry per
+    /// RTABandingResolution case, since minHz/maxHz/referenceHz are
+    /// effectively constant in practice.
+    private struct BandEdgesCacheKey: Hashable {
+        let barsPerOctave: Int
+        let minHz: Double
+        let maxHz: Double
+        let referenceHz: Double
+    }
+    private static let bandEdgesCache = OSAllocatedUnfairLock<[BandEdgesCacheKey: [(lowerHz: Double, upperHz: Double)]]>(initialState: [:])
 
     /// Band edges for `barsPerOctave` bands per octave, anchored at 1kHz
     /// (user question: "what would be the best choice to stay aligned with
@@ -44,13 +66,19 @@ enum RTABinning {
     /// independently rounding the steps up and down from 1kHz).
     static func bandEdges(barsPerOctave: Int, minHz: Double = FrequencyAxis.minHz, maxHz: Double = FrequencyAxis.maxHz, referenceHz: Double = 1000) -> [(lowerHz: Double, upperHz: Double)] {
         guard barsPerOctave > 0 else { return [] }
+        let key = BandEdgesCacheKey(barsPerOctave: barsPerOctave, minHz: minHz, maxHz: maxHz, referenceHz: referenceHz)
+        if let cached = bandEdgesCache.withLock({ $0[key] }) { return cached }
+
         let step = 1.0 / Double(barsPerOctave)
         let stepsDown = Int((log2(referenceHz / minHz) * Double(barsPerOctave)).rounded())
         let stepsUp = Int((log2(maxHz / referenceHz) * Double(barsPerOctave)).rounded())
-        return (-stepsDown...stepsUp).map { n in
+        let edges = (-stepsDown...stepsUp).map { n -> (lowerHz: Double, upperHz: Double) in
             let center = referenceHz * pow(2, Double(n) * step)
             return (center * pow(2, -step / 2), center * pow(2, step / 2))
         }
+
+        bandEdgesCache.withLock { $0[key] = edges }
+        return edges
     }
 
     /// Each bar takes the loudest bin within its log-frequency range,
