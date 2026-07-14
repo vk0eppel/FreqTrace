@@ -32,30 +32,41 @@ struct RTAView: View {
 
     var body: some View {
         Canvas { context, size in
+            let barsPerOctave = pipeline.bandingResolution.rawValue
             let bars = RTABinning.bars(
                 magnitudes: pipeline.latestMagnitudes,
                 config: pipeline.config,
-                barCount: pipeline.bandingResolution.barCount(),
+                barsPerOctave: barsPerOctave,
                 fullScalePower: pipeline.fullScalePower
             )
             guard !bars.isEmpty else { return }
 
-            let barCount = bars.count
+            // Positioned by each bar's actual (1kHz-anchored) frequency
+            // range via FrequencyAxis, not by array index (bug fix -- user
+            // report: "the rta bars and x axis scale are clearly off (even
+            // at 1k)") -- index no longer maps 1:1 to log-frequency
+            // position now that bar count comes from independently
+            // rounding the octave steps up/down from 1kHz, so evenly
+            // dividing the canvas by index drifted out of sync with the
+            // x-axis labels, which position by true frequency.
+            let edges = RTABinning.bandEdges(barsPerOctave: barsPerOctave)
             let gap: CGFloat = 2
-            let barWidth = (size.width - gap * CGFloat(barCount - 1)) / CGFloat(barCount)
 
             for (index, normalized) in bars.enumerated() {
+                let edge = edges[index]
+                let xStart = CGFloat(FrequencyAxis.normalizedPosition(forHz: edge.lowerHz)) * size.width
+                let xEnd = CGFloat(FrequencyAxis.normalizedPosition(forHz: edge.upperHz)) * size.width
+                let barWidth = max(1, xEnd - xStart - gap)
                 let barHeight = size.height * CGFloat(normalized)
-                let x = CGFloat(index) * (barWidth + gap)
-                let rect = CGRect(x: x, y: size.height - barHeight, width: barWidth, height: barHeight)
+                let rect = CGRect(x: xStart, y: size.height - barHeight, width: barWidth, height: barHeight)
                 let path = Path(roundedRect: rect, cornerSize: CGSize(width: 2, height: 2))
                 context.fill(path, with: .color(theme.accent))
 
                 if let peak = pipeline.peakForRTABar(index) {
                     let peakY = size.height - size.height * CGFloat(peak)
                     var peakLine = Path()
-                    peakLine.move(to: CGPoint(x: x, y: peakY))
-                    peakLine.addLine(to: CGPoint(x: x + barWidth, y: peakY))
+                    peakLine.move(to: CGPoint(x: xStart, y: peakY))
+                    peakLine.addLine(to: CGPoint(x: xStart + barWidth, y: peakY))
                     context.stroke(peakLine, with: .color(theme.text), lineWidth: 2)
                 }
             }

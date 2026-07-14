@@ -315,7 +315,7 @@ final class AudioPipelineViewModel {
         // level's peaks -- Peak hold is supposed to be indefinite
         // (CONTEXT.md "Peak"), not paused whenever the tech is looking at
         // the waterfall instead (found by code review).
-        let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config, barCount: bandingResolution.barCount(), fullScalePower: result.fullScalePower)
+        let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config, barsPerOctave: bandingResolution.rawValue, fullScalePower: result.fullScalePower)
         for (index, value) in bars.enumerated() {
             peakTracker.update(value, for: .rtaBar(index))
         }

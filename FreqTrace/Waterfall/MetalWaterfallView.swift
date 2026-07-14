@@ -51,7 +51,7 @@ struct MetalWaterfallView: NSViewRepresentable {
     func updateNSView(_ nsView: MTKView, context: Context) {
         context.coordinator?.setAppearanceMode(appearanceMode)
         guard !magnitudes.isEmpty else { return }
-        let stepped = RTABinning.steppedMagnitudes(magnitudes: magnitudes, config: config, barCount: bandingResolution.barCount())
+        let stepped = RTABinning.steppedMagnitudes(magnitudes: magnitudes, config: config, barsPerOctave: bandingResolution.rawValue)
         context.coordinator?.pushMagnitudes(stepped, fullScalePower: fullScalePower)
     }
 }

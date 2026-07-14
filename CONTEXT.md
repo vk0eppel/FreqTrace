@@ -55,7 +55,7 @@ A post-FFT stage that blends level across consecutive frames (Fast/Slow presets)
 _Avoid_: Smoothing (ambiguous with Octave Smoothing — always specify which)
 
 **Octave Smoothing**:
-A frequency-domain averaging across neighboring FFT bins at a single instant (e.g. 1/3, 1/6, 1/12-oct), reducing bin-to-bin jaggedness in a spectrum display. Distinct from Time Averaging — this smooths across frequency, not across time. Not yet decided whether/how this is exposed in v1.
+A frequency-domain averaging across neighboring FFT bins at a single instant (e.g. 1/3, 1/6, 1/12-oct), reducing bin-to-bin jaggedness in a spectrum display. Distinct from Time Averaging — this smooths across frequency, not across time. Superseded in practice by octave banding (selectable 1/1–1/48 octave resolution, `RTABandingResolution`, shared by RTA and the waterfall): each band takes the *loudest* bin in its range rather than averaging them, the standard real-analyzer convention — a genuinely different DSP operation from smoothing, but it addresses the same underlying readability need, so true bin-averaging Octave Smoothing is no longer planned as a separate feature.
 _Avoid_: Smoothing (ambiguous with Time Averaging — always specify which)
 
 **Measured Data row**:

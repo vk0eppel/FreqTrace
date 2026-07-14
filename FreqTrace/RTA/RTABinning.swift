@@ -9,17 +9,49 @@
 //  MagnitudeScaling (the waterfall's dB normalization). Pure -- this is the
 //  test seam; RTAView (SwiftUI Canvas) is the untested rendering glue.
 //
-//  Bar count v1 default: CLAUDE.md flags "RTA resolution/band count" as
-//  deferred ("revisit once RTA is actually being built"). No spec pins
-//  this down, so 48 is a judgment call -- coarse enough to read at a
-//  glance from a distance (CLAUDE.md's product goal), fine enough to
-//  distinguish the labeled bands (100Hz-10kHz). Revisit if it's wrong.
-//
 
 import Foundation
 
 enum RTABinning {
-    static let defaultBarCount = 48
+    static let defaultBarsPerOctave = 12
+
+    /// Band edges for `barsPerOctave` bands per octave, anchored at 1kHz
+    /// (user question: "what would be the best choice to stay aligned with
+    /// the standard 1/3-octave frequencies with any banding choice?").
+    /// Centers are `referenceHz * 2^(n / barsPerOctave)` for integer n, so
+    /// n=0 always lands exactly on 1kHz regardless of `barsPerOctave`, and
+    /// every coarser resolution's centers are an exact subset of every
+    /// finer one's (1/3 = 2/6 = 4/12 = 8/24 = 16/48 octave) -- switching
+    /// resolution only adds/removes bands between the existing ones, never
+    /// shifts them, the same nesting property real graphic EQs/analyzers
+    /// have. This reproduces the standard 1/3-octave preferred-frequency
+    /// series almost exactly (2^(1/3) is a hair off the true decimal
+    /// preferred-number ratio 10^(1/10), close enough to round to the same
+    /// nominal labels). 20Hz/20kHz become approximate nominal endpoints
+    /// rather than exact centers as a result -- same as the real standard's
+    /// own nominal "20Hz" band, which is ~19.95Hz in the exact math. (An
+    /// earlier version centered exactly on minHz/maxHz instead by dividing
+    /// the whole range into equal slices, but that meant 1kHz almost never
+    /// landed on a center and every resolution had its own independent,
+    /// non-nesting grid -- user report: "shouldn't we have a bar centered
+    /// exactly around 1k? it seems off".)
+    ///
+    /// Not private -- RTAView needs each bar's real (lowerHz, upperHz) to
+    /// draw it at its true FrequencyAxis position (bug fix -- user report:
+    /// "the rta bars and x axis scale are clearly off (even at 1k)": array
+    /// index no longer maps 1:1 to log-frequency position the way it did
+    /// under the old equal-slice scheme, since bar count here comes from
+    /// independently rounding the steps up and down from 1kHz).
+    static func bandEdges(barsPerOctave: Int, minHz: Double = FrequencyAxis.minHz, maxHz: Double = FrequencyAxis.maxHz, referenceHz: Double = 1000) -> [(lowerHz: Double, upperHz: Double)] {
+        guard barsPerOctave > 0 else { return [] }
+        let step = 1.0 / Double(barsPerOctave)
+        let stepsDown = Int((log2(referenceHz / minHz) * Double(barsPerOctave)).rounded())
+        let stepsUp = Int((log2(maxHz / referenceHz) * Double(barsPerOctave)).rounded())
+        return (-stepsDown...stepsUp).map { n in
+            let center = referenceHz * pow(2, Double(n) * step)
+            return (center * pow(2, -step / 2), center * pow(2, step / 2))
+        }
+    }
 
     /// Each bar takes the loudest bin within its log-frequency range,
     /// normalized via MagnitudeScaling ("highest level" semantics, not an
@@ -47,8 +79,8 @@ enum RTABinning {
     /// same synthetic-reference-tone technique
     /// FrequencyTracker.weightedLevelDb already uses for SPL) before
     /// MagnitudeScaling's -80/0dB floor/ceiling means anything.
-    static func bars(magnitudes: [Float], config: AnalysisConfig, barCount: Int = defaultBarCount, fullScalePower: Float) -> [Float] {
-        guard barCount > 0, !magnitudes.isEmpty else { return [] }
+    static func bars(magnitudes: [Float], config: AnalysisConfig, barsPerOctave: Int = defaultBarsPerOctave, fullScalePower: Float) -> [Float] {
+        guard barsPerOctave > 0, !magnitudes.isEmpty else { return [] }
         let safeFullScalePower = max(fullScalePower, .leastNormalMagnitude)
 
         let binHz = config.sampleRate / Double(config.windowSize)
@@ -58,12 +90,11 @@ enum RTABinning {
             min(max(1, Int((hz / binHz).rounded())), maxBin)
         }
 
-        var powerPerBar = [Float](repeating: 0, count: barCount)
-        for barIndex in 0..<barCount {
-            let lowerHz = FrequencyAxis.hz(atNormalizedPosition: Double(barIndex) / Double(barCount))
-            let upperHz = FrequencyAxis.hz(atNormalizedPosition: Double(barIndex + 1) / Double(barCount))
-            let lowerBin = nearestBin(toHz: lowerHz)
-            let upperBin = nearestBin(toHz: upperHz)
+        let edges = bandEdges(barsPerOctave: barsPerOctave)
+        var powerPerBar = [Float](repeating: 0, count: edges.count)
+        for (barIndex, edge) in edges.enumerated() {
+            let lowerBin = nearestBin(toHz: edge.lowerHz)
+            let upperBin = nearestBin(toHz: edge.upperHz)
 
             if upperBin > lowerBin {
                 var peak: Float = 0
@@ -74,9 +105,9 @@ enum RTABinning {
             } else {
                 // Bar is narrower than one FFT bin -- no bin's frequency
                 // falls strictly within its range, so fall back to the
-                // single nearest bin (at the bar's midpoint) instead of
+                // single nearest bin (at the bar's center) instead of
                 // leaving it silent.
-                powerPerBar[barIndex] = magnitudes[nearestBin(toHz: (lowerHz + upperHz) / 2)]
+                powerPerBar[barIndex] = magnitudes[nearestBin(toHz: (edge.lowerHz + edge.upperHz) / 2)]
             }
         }
 
@@ -87,17 +118,17 @@ enum RTABinning {
     /// request: "it should be the same for the waterfall") rather than the
     /// RTA -- the waterfall writes one texel per raw FFT bin instead of
     /// resampling to a fixed bar count (WaterfallRenderer.writeRow), so
-    /// collapsing down to `barCount` values the way `bars` does isn't
-    /// useful here. Instead, each bar's peak is expanded back out across
-    /// every bin in its own range, producing a full bin-resolution array
-    /// that's piecewise-flat ("stepped") per band instead of varying
-    /// smoothly per bin -- the shader's linear filtering between adjacent
-    /// texels only blurs at the ~1-texel-wide band edges, so this reads as
-    /// genuine discrete bands, not a softened version of the raw spectrum.
-    /// Still raw power, not normalized -- WaterfallRenderer.writeRow
-    /// applies MagnitudeScaling itself, same as it always has.
-    static func steppedMagnitudes(magnitudes: [Float], config: AnalysisConfig, barCount: Int) -> [Float] {
-        guard barCount > 0, !magnitudes.isEmpty else { return magnitudes }
+    /// collapsing down to a bar array the way `bars` does isn't useful
+    /// here. Instead, each bar's peak is expanded back out across every
+    /// bin in its own range, producing a full bin-resolution array that's
+    /// piecewise-flat ("stepped") per band instead of varying smoothly per
+    /// bin -- the shader's linear filtering between adjacent texels only
+    /// blurs at the ~1-texel-wide band edges, so this reads as genuine
+    /// discrete bands, not a softened version of the raw spectrum. Still
+    /// raw power, not normalized -- WaterfallRenderer.writeRow applies
+    /// MagnitudeScaling itself, same as it always has.
+    static func steppedMagnitudes(magnitudes: [Float], config: AnalysisConfig, barsPerOctave: Int) -> [Float] {
+        guard barsPerOctave > 0, !magnitudes.isEmpty else { return magnitudes }
 
         let binHz = config.sampleRate / Double(config.windowSize)
         let maxBin = magnitudes.count - 1
@@ -106,12 +137,11 @@ enum RTABinning {
             min(max(1, Int((hz / binHz).rounded())), maxBin)
         }
 
+        let edges = bandEdges(barsPerOctave: barsPerOctave)
         var stepped = magnitudes
-        for barIndex in 0..<barCount {
-            let lowerHz = FrequencyAxis.hz(atNormalizedPosition: Double(barIndex) / Double(barCount))
-            let upperHz = FrequencyAxis.hz(atNormalizedPosition: Double(barIndex + 1) / Double(barCount))
-            let lowerBin = nearestBin(toHz: lowerHz)
-            let upperBin = nearestBin(toHz: upperHz)
+        for edge in edges {
+            let lowerBin = nearestBin(toHz: edge.lowerHz)
+            let upperBin = nearestBin(toHz: edge.upperHz)
 
             let peak: Float
             let fillRange: ClosedRange<Int>
@@ -121,7 +151,7 @@ enum RTABinning {
             } else {
                 // Bar narrower than one FFT bin -- same nearest-bin
                 // fallback `bars` uses, just filling that single bin.
-                let bin = nearestBin(toHz: (lowerHz + upperHz) / 2)
+                let bin = nearestBin(toHz: (edge.lowerHz + edge.upperHz) / 2)
                 peak = magnitudes[bin]
                 fillRange = bin...bin
             }

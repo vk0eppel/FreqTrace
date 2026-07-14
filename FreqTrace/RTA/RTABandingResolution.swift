@@ -12,7 +12,13 @@
 //  ("1/3 octave", "1/12 octave", ...) rather than a raw bar count, since
 //  that's the vocabulary a live sound tech already knows. `rawValue` is
 //  bars-per-octave, so higher is finer resolution -- 1/48 octave is far
-//  denser than 1/1 octave, not the reverse.
+//  denser than 1/1 octave, not the reverse. `rawValue` is passed straight
+//  into RTABinning.bars/steppedMagnitudes as `barsPerOctave` -- there's no
+//  separate total-bar-count to compute here, since RTABinning's 1kHz-
+//  anchored band grid derives the actual count itself (user question:
+//  "what would be the best choice to stay aligned with the standard 1/3-
+//  octave frequencies with any banding choice?" -- anchoring at 1kHz
+//  rather than at minHz/maxHz).
 //
 
 import Foundation
@@ -28,15 +34,4 @@ enum RTABandingResolution: Int, CaseIterable, Identifiable {
     var id: Int { rawValue }
 
     var label: String { "1/\(rawValue)" }
-
-    /// Total bar count across the full log-frequency range (~9.97 octaves
-    /// at the default 20Hz-20kHz `FrequencyAxis` range), rounded to the
-    /// nearest whole bar. RTABinning is bar-centric (see its own header
-    /// comment), so any bar count -- from a coarse 10 bars at 1/1 octave up
-    /// to a dense ~478 at 1/48 -- already falls back to the nearest FFT bin
-    /// when a bar is narrower than the FFT's own bin resolution.
-    func barCount(minHz: Double = FrequencyAxis.minHz, maxHz: Double = FrequencyAxis.maxHz) -> Int {
-        let octaves = log2(maxHz / minHz)
-        return max(1, Int((octaves * Double(rawValue)).rounded()))
-    }
 }

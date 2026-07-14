@@ -10,6 +10,13 @@
 //  covered by WaterfallLogicTests.swift, so these tests focus on the
 //  binning behavior itself, not re-testing the shared math.
 //
+//  Band count and positions are driven by `barsPerOctave`, anchored at
+//  1kHz (user question: "what would be the best choice to stay aligned
+//  with the standard 1/3-octave frequencies with any banding choice?") --
+//  n=0 always lands exactly on 1kHz, so these tests compute expected bar
+//  indices/counts via the same stepsDown/stepsUp formula RTABinning uses
+//  internally, rather than a pre-1kHz-anchoring formula.
+//
 
 import Foundation
 import Testing
@@ -19,30 +26,57 @@ struct RTABinningTests {
 
     private let config = AnalysisConfig.default // 48kHz / 4096-window / 2048-hop
 
-    @Test func producesExactlyBarCountBars() {
+    /// Steps down from the 1kHz reference to FrequencyAxis.minHz, at
+    /// `barsPerOctave` bands per octave -- also the array index of the
+    /// bar centered exactly on 1kHz (n=0), since RTABinning's edges run
+    /// from n=-stepsDown to n=+stepsUp.
+    private func stepsDown(barsPerOctave: Int) -> Int {
+        Int((log2(1000 / FrequencyAxis.minHz) * Double(barsPerOctave)).rounded())
+    }
+
+    private func stepsUp(barsPerOctave: Int) -> Int {
+        Int((log2(FrequencyAxis.maxHz / 1000) * Double(barsPerOctave)).rounded())
+    }
+
+    /// Array index of the band nearest `hz`, at `barsPerOctave` bands per
+    /// octave anchored at 1kHz.
+    private func barIndex(forHz hz: Double, barsPerOctave: Int) -> Int {
+        stepsDown(barsPerOctave: barsPerOctave) + Int((log2(hz / 1000) * Double(barsPerOctave)).rounded())
+    }
+
+    @Test func producesBarCountDerivedFromBarsPerOctave() {
         let magnitudes = [Float](repeating: 0, count: config.windowSize / 2)
+        let barsPerOctave = 3
 
-        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barCount: 32, fullScalePower: 1.0)
+        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barsPerOctave: barsPerOctave, fullScalePower: 1.0)
 
-        #expect(bars.count == 32)
+        // 1/3 octave across 20Hz-20kHz: 31 bands (user report: "at 1/3 we
+        // should have 31 bands"), not an arbitrary requested count --
+        // `barsPerOctave` bands per octave anchored at 1kHz determines the
+        // count, it isn't a direct input anymore.
+        let expectedCount = stepsDown(barsPerOctave: barsPerOctave) + stepsUp(barsPerOctave: barsPerOctave) + 1
+        #expect(expectedCount == 31)
+        #expect(bars.count == expectedCount)
     }
 
     @Test func emptyMagnitudesProducesEmptyBars() {
-        let bars = RTABinning.bars(magnitudes: [], config: config, barCount: 32, fullScalePower: 1.0)
+        let bars = RTABinning.bars(magnitudes: [], config: config, barsPerOctave: 12, fullScalePower: 1.0)
 
         #expect(bars.isEmpty)
     }
 
-    @Test func loudToneProducesAPeakInTheBarMatchingItsLogFrequencyPosition() {
+    @Test func loudToneProducesAPeakInTheBarCenteredOn1kHz() {
         var magnitudes = [Float](repeating: 0, count: config.windowSize / 2)
         let binHz = config.sampleRate / Double(config.windowSize)
         let toneBin = Int(1000 / binHz) // 1kHz
         magnitudes[toneBin] = 1.0 // full-scale power
 
-        let barCount = 48
-        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barCount: barCount, fullScalePower: 1.0)
+        let barsPerOctave = 12
+        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barsPerOctave: barsPerOctave, fullScalePower: 1.0)
 
-        let expectedBar = min(barCount - 1, Int(FrequencyAxis.normalizedPosition(forHz: 1000) * Double(barCount)))
+        // 1kHz (n=0) is always at array index stepsDown, regardless of
+        // barsPerOctave -- the whole point of anchoring at 1kHz.
+        let expectedBar = stepsDown(barsPerOctave: barsPerOctave)
         let loudestBar = bars.indices.max(by: { bars[$0] < bars[$1] })!
 
         #expect(loudestBar == expectedBar)
@@ -52,7 +86,7 @@ struct RTABinningTests {
     @Test func silentSpectrumProducesBarsAtTheFloor() {
         let magnitudes = [Float](repeating: 0, count: config.windowSize / 2)
 
-        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barCount: 32, fullScalePower: 1.0)
+        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barsPerOctave: 12, fullScalePower: 1.0)
 
         #expect(bars.allSatisfy { $0 == 0 })
     }
@@ -78,13 +112,14 @@ struct RTABinningTests {
         // amplitude, so -12dB power ~ a quarter of the full-scale power).
         quietMagnitudes[toneBin] = realisticFullScaleRawPower * Float(pow(10, -12.0 / 10.0))
 
+        let barsPerOctave = 12
         let loudBars = RTABinning.bars(
-            magnitudes: loudMagnitudes, config: config, barCount: 48, fullScalePower: realisticFullScaleRawPower
+            magnitudes: loudMagnitudes, config: config, barsPerOctave: barsPerOctave, fullScalePower: realisticFullScaleRawPower
         )
         let quietBars = RTABinning.bars(
-            magnitudes: quietMagnitudes, config: config, barCount: 48, fullScalePower: realisticFullScaleRawPower
+            magnitudes: quietMagnitudes, config: config, barsPerOctave: barsPerOctave, fullScalePower: realisticFullScaleRawPower
         )
-        let bin = min(47, Int(FrequencyAxis.normalizedPosition(forHz: 1000) * 48))
+        let bin = stepsDown(barsPerOctave: barsPerOctave) // 1kHz (n=0)
 
         // Both must NOT simply peg to 1.0 -- the quieter tone should read
         // meaningfully lower than the loud one, proving the raw power was
@@ -106,10 +141,11 @@ struct RTABinningTests {
         // sub-63Hz region stays exactly at the floor, that bar never got a
         // bin mapped to it.
         let magnitudes = [Float](repeating: 1000, count: config.windowSize / 2)
+        let barsPerOctave = 12
 
-        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barCount: 48, fullScalePower: 1000)
+        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barsPerOctave: barsPerOctave, fullScalePower: 1000)
 
-        let cutoffBar = Int(FrequencyAxis.normalizedPosition(forHz: 63) * 48)
+        let cutoffBar = barIndex(forHz: 63, barsPerOctave: barsPerOctave)
         for bar in 0...cutoffBar {
             #expect(bars[bar] > 0, "bar \(bar) (below 63Hz) should not be silent")
         }
