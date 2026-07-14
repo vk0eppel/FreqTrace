@@ -28,4 +28,13 @@ struct PeakHoldTracker<Key: Hashable> {
     mutating func reset() {
         peaks.removeAll()
     }
+
+    /// Clears only keys matching `predicate` -- for RTA bars specifically,
+    /// whose index no longer means the same frequency once the bar count
+    /// changes (banding resolution). Without this, a stale peak from a
+    /// coarse layout could sit at the wrong index in a denser one,
+    /// possibly forever (peaks only ever rise).
+    mutating func removeAll(where predicate: (Key) -> Bool) {
+        peaks = peaks.filter { !predicate($0.key) }
+    }
 }

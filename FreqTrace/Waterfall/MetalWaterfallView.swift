@@ -23,6 +23,13 @@ struct MetalWaterfallView: NSViewRepresentable {
     /// WaterfallRenderer.writeRow divides by this before applying
     /// MagnitudeScaling's dB floor/ceiling. See FrequencyTracker.fullScalePower.
     var fullScalePower: Float = 1
+    /// Octave-banding resolution (user request: "the same for the
+    /// waterfall" as RTA's selectable bars-per-octave) -- pre-bins
+    /// `magnitudes` into piecewise-flat bands before writing to the GPU
+    /// texture, reusing RTABinning's bar-centric logic (RTABinning.swift's
+    /// `steppedMagnitudes`) rather than resampling to a smaller texture, so
+    /// none of the Metal-side remap math or texture sizing needs to change.
+    var bandingResolution: RTABandingResolution = .oneOverTwelve
 
     func makeCoordinator() -> WaterfallRenderer? {
         guard let device = MTLCreateSystemDefaultDevice() else { return nil }
@@ -44,6 +51,7 @@ struct MetalWaterfallView: NSViewRepresentable {
     func updateNSView(_ nsView: MTKView, context: Context) {
         context.coordinator?.setAppearanceMode(appearanceMode)
         guard !magnitudes.isEmpty else { return }
-        context.coordinator?.pushMagnitudes(magnitudes, fullScalePower: fullScalePower)
+        let stepped = RTABinning.steppedMagnitudes(magnitudes: magnitudes, config: config, barCount: bandingResolution.barCount())
+        context.coordinator?.pushMagnitudes(stepped, fullScalePower: fullScalePower)
     }
 }

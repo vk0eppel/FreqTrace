@@ -121,6 +121,30 @@ final class AudioPipelineViewModel {
         peakTracker.reset()
     }
 
+    /// Octave-banding resolution (user request: selectable "bars per
+    /// octave," 1/1 through 1/48 -- see RTABandingResolution), shared
+    /// between RTA and the waterfall (confirmed with user: one setting,
+    /// not independent per view) rather than duplicated per view. Lives
+    /// here, not on RTAView, because RTA bar peaks are computed every hop
+    /// regardless of which view is visible (see `apply(_:)` below), so
+    /// that continuous peak computation and RTAView's own live rendering
+    /// must agree on the same bar count; the waterfall reads it too, to
+    /// pre-bin its magnitudes before writing to the GPU texture
+    /// (RTABinning.steppedMagnitudes, called from MetalWaterfallView).
+    /// Changing it clears only the RTA bars' held peaks -- a bar index no
+    /// longer means the same frequency once the bar count changes, so an
+    /// old peak at that index would be stale data on the new layout, not a
+    /// real held peak for it.
+    var bandingResolution: RTABandingResolution = .oneOverTwelve {
+        didSet {
+            guard bandingResolution != oldValue else { return }
+            peakTracker.removeAll { key in
+                if case .rtaBar = key { return true }
+                return false
+            }
+        }
+    }
+
     var weighting: Weighting = .default {
         didSet {
             guard weighting != oldValue else { return }
@@ -291,7 +315,7 @@ final class AudioPipelineViewModel {
         // level's peaks -- Peak hold is supposed to be indefinite
         // (CONTEXT.md "Peak"), not paused whenever the tech is looking at
         // the waterfall instead (found by code review).
-        let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config, fullScalePower: result.fullScalePower)
+        let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config, barCount: bandingResolution.barCount(), fullScalePower: result.fullScalePower)
         for (index, value) in bars.enumerated() {
             peakTracker.update(value, for: .rtaBar(index))
         }

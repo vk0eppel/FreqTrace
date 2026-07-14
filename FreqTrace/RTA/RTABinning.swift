@@ -82,4 +82,53 @@ enum RTABinning {
 
         return powerPerBar.map { MagnitudeScaling.normalized(power: $0 / safeFullScalePower) }
     }
+
+    /// Same octave-banding math as `bars`, but for the waterfall (user
+    /// request: "it should be the same for the waterfall") rather than the
+    /// RTA -- the waterfall writes one texel per raw FFT bin instead of
+    /// resampling to a fixed bar count (WaterfallRenderer.writeRow), so
+    /// collapsing down to `barCount` values the way `bars` does isn't
+    /// useful here. Instead, each bar's peak is expanded back out across
+    /// every bin in its own range, producing a full bin-resolution array
+    /// that's piecewise-flat ("stepped") per band instead of varying
+    /// smoothly per bin -- the shader's linear filtering between adjacent
+    /// texels only blurs at the ~1-texel-wide band edges, so this reads as
+    /// genuine discrete bands, not a softened version of the raw spectrum.
+    /// Still raw power, not normalized -- WaterfallRenderer.writeRow
+    /// applies MagnitudeScaling itself, same as it always has.
+    static func steppedMagnitudes(magnitudes: [Float], config: AnalysisConfig, barCount: Int) -> [Float] {
+        guard barCount > 0, !magnitudes.isEmpty else { return magnitudes }
+
+        let binHz = config.sampleRate / Double(config.windowSize)
+        let maxBin = magnitudes.count - 1
+
+        func nearestBin(toHz hz: Double) -> Int {
+            min(max(1, Int((hz / binHz).rounded())), maxBin)
+        }
+
+        var stepped = magnitudes
+        for barIndex in 0..<barCount {
+            let lowerHz = FrequencyAxis.hz(atNormalizedPosition: Double(barIndex) / Double(barCount))
+            let upperHz = FrequencyAxis.hz(atNormalizedPosition: Double(barIndex + 1) / Double(barCount))
+            let lowerBin = nearestBin(toHz: lowerHz)
+            let upperBin = nearestBin(toHz: upperHz)
+
+            let peak: Float
+            let fillRange: ClosedRange<Int>
+            if upperBin > lowerBin {
+                peak = magnitudes[lowerBin...upperBin].max() ?? 0
+                fillRange = lowerBin...upperBin
+            } else {
+                // Bar narrower than one FFT bin -- same nearest-bin
+                // fallback `bars` uses, just filling that single bin.
+                let bin = nearestBin(toHz: (lowerHz + upperHz) / 2)
+                peak = magnitudes[bin]
+                fillRange = bin...bin
+            }
+            for bin in fillRange {
+                stepped[bin] = peak
+            }
+        }
+        return stepped
+    }
 }
