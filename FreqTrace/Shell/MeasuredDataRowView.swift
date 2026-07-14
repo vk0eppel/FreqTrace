@@ -24,7 +24,20 @@
 //  none had a fixed width. Fixed via the standard SwiftUI trick -- an
 //  invisible reference string at the widest plausible value reserves the
 //  layout width; the real (shorter-or-equal) value overlays on top,
-//  left-aligned, without affecting the container's size.
+//  trailing-aligned (user report: "the Hz part is moving" -- left-aligning
+//  the overlay left the unit suffix drifting as digit count changed),
+//  without affecting the container's size.
+//
+//  Fixed-height blocks, top-aligned (user report: "should always stay at
+//  the same height, on top of their line"): the three blocks used to sit
+//  in a plain HStack (default center alignment) with each block's own
+//  height determined by its optional content (a Peak label that may or
+//  may not be showing, 0-3 Anomaly Candidate rows) -- so blocks visibly
+//  resized and re-centered as that content came and went. Every optional
+//  region below now reserves its maximum plausible height via the same
+//  hidden-reference-overlay trick fixedWidth already established
+//  (fixedHeight, vertical instead of horizontal), and the row's HStack is
+//  explicitly top-aligned.
 //
 
 import SwiftUI
@@ -36,27 +49,29 @@ struct MeasuredDataRowView: View {
     @State private var highestSeverityPulse = false
 
     var body: some View {
-        HStack(spacing: 0) {
+        HStack(alignment: .top, spacing: 12) {
             dataBlock(label: "TRACKED FREQUENCY") {
                 VStack(alignment: .leading, spacing: 2) {
                     heroValue(trackedFrequencyViewModel.formattedFrequency)
-                    if let peak = trackedFrequencyViewModel.formattedTrackedFrequencyLevelPeak {
-                        peakLabel(peak)
+                    fixedHeight(reference: peakLabelReference) {
+                        if let peak = trackedFrequencyViewModel.formattedTrackedFrequencyLevelPeak {
+                            peakLabel(peak)
+                        }
                     }
                 }
             }
-            divider
             dataBlock(label: "ANOMALY CANDIDATES") {
-                if !trackedFrequencyViewModel.anomalyCandidates.isEmpty {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(Array(trackedFrequencyViewModel.anomalyCandidates.enumerated()), id: \.element.id) { rank, candidate in
-                            anomalyRow(candidate, rank: rank)
+                fixedHeight(reference: anomalyCandidatesReference) {
+                    if !trackedFrequencyViewModel.anomalyCandidates.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(Array(trackedFrequencyViewModel.anomalyCandidates.enumerated()), id: \.element.id) { rank, candidate in
+                                anomalyRow(candidate, rank: rank)
+                            }
                         }
                     }
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            divider
             dataBlock(label: "SPL") {
                 VStack(alignment: .leading, spacing: 4) {
                     fixedWidth(
@@ -67,8 +82,10 @@ struct MeasuredDataRowView: View {
                             .font(.system(size: Typography.secondarySize, weight: .semibold, design: .monospaced))
                             .foregroundStyle(trackedFrequencyViewModel.splDb == nil ? theme.textFaint : theme.text)
                     }
-                    if let peak = trackedFrequencyViewModel.formattedSPLPeak {
-                        peakLabel(peak)
+                    fixedHeight(reference: peakLabelReference) {
+                        if let peak = trackedFrequencyViewModel.formattedSPLPeak {
+                            peakLabel(peak)
+                        }
                     }
                     splOffsetControl
                 }
@@ -139,12 +156,45 @@ struct MeasuredDataRowView: View {
             .foregroundStyle(theme.textDim)
     }
 
-    private var divider: some View {
-        Rectangle()
-            .fill(theme.borderSoft)
-            .frame(width: 1)
-            .padding(.vertical, 4)
+    /// Height reference for the optional Peak label line (shared by
+    /// Tracked Frequency and SPL) -- any non-empty string at the same font
+    /// reserves the correct line height; the exact text never renders.
+    private var peakLabelReference: some View {
+        Text("PEAK -100 dB")
+            .font(.system(size: Typography.subCaptionSize, weight: .medium, design: .monospaced))
     }
+
+    /// Height reference for the Anomaly Candidates area -- three rows at
+    /// each rank's real font size/spacing, so the block always reserves
+    /// room for the maximum 2-3 rows (CONTEXT.md "Measured Data row")
+    /// regardless of how many are currently showing. Plain Text, not
+    /// anomalyRow(_:rank:) itself -- reusing that would attach a second
+    /// onAppear to a hidden view and could kick off a redundant pulse
+    /// animation for no visible row.
+    private var anomalyCandidatesReference: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("0000 Hz").font(.system(size: 22, weight: .semibold, design: .monospaced))
+            Text("0000 Hz").font(.system(size: 18, weight: .semibold, design: .monospaced))
+            Text("0000 Hz").font(.system(size: 15, weight: .semibold, design: .monospaced))
+        }
+    }
+
+    /// Reserves layout height for `reference` (rendered invisibly) so
+    /// optional/variable-count content never resizes its block as it
+    /// comes and goes (user report: "should always stay at the same
+    /// height, on top of their line") -- `content` overlays on top,
+    /// top-left-anchored, at its own natural size.
+    private func fixedHeight(reference: some View, @ViewBuilder content: () -> some View) -> some View {
+        reference
+            .hidden()
+            .overlay(alignment: .topLeading) { content() }
+    }
+
+    // Fixed content height (user report: "the boxes height should be
+    // fixed") -- sized to the tallest block (Tracked Frequency: its caption
+    // + the 64pt hero digits + the Peak line), so all three meter panels
+    // match regardless of how much a given block's value actually needs.
+    private static let dataBlockContentHeight: CGFloat = 112
 
     @ViewBuilder
     private func dataBlock(label: String, @ViewBuilder value: () -> some View) -> some View {
@@ -155,7 +205,10 @@ struct MeasuredDataRowView: View {
                 .foregroundStyle(theme.textFaint)
             value()
         }
-        .padding(.horizontal, 24)
+        .frame(height: Self.dataBlockContentHeight, alignment: .top)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .meterPanel()
     }
 
     private func heroValue(_ text: String) -> some View {
@@ -176,12 +229,14 @@ struct MeasuredDataRowView: View {
     /// rendered invisibly at `font`) so a shorter live value never shifts
     /// anything positioned after this block (user report: "space is
     /// moving when the frequency changes") -- `content` overlays on top,
-    /// left-aligned, at its own natural width.
+    /// trailing-aligned, at its own natural width, so the unit suffix
+    /// ("Hz"/"dB") stays anchored in place and only the leading digits
+    /// shift as their count changes (user report: "the Hz part is moving").
     private func fixedWidth(reference: String, font: Font, @ViewBuilder content: () -> some View) -> some View {
         Text(reference)
             .font(font)
             .hidden()
-            .overlay(alignment: .leading) { content() }
+            .overlay(alignment: .trailing) { content() }
     }
 }
 

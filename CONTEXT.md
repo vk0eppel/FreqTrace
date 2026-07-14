@@ -32,7 +32,7 @@ An explicit, user-triggered pause of an entire view's updates, so the tech can w
 _Avoid_: Pause (ambiguous with Stop — always use the specific term)
 
 **Stop**:
-An explicit, user-triggered halt of the AVAudioEngine capture pipeline itself — audio capture stops, not just the display. Used when the tech is done measuring for a while (between soundcheck and doors, on a break), not for quick glances. Resuming requires re-initializing capture, so it's slower than un-Freezing. Distinct from Freeze.
+An explicit, user-triggered halt of the AVAudioEngine capture pipeline itself — audio capture stops, not just the display. Used when the tech is done measuring for a while (between soundcheck and doors, on a break), not for quick glances. Resuming requires re-initializing capture, so it's slower than un-Freezing. Distinct from Freeze. The app now launches already in this Stopped state — capture no longer auto-starts on open, so the button reads "Start" until the tech presses it (see ADR 0007).
 _Avoid_: Pause (ambiguous with Freeze — always use the specific term)
 
 **Input Device**:

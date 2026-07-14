@@ -115,10 +115,19 @@ struct WaterfallZoneView: View {
         }
     }
 
+    // Inset top/bottom (user report: "first/last value mainly out of
+    // screen"): the oldest ("-15s") and newest ("now") gridlines used to map
+    // to y=0 and y=proxy.size.height exactly -- flush against the view's
+    // own .clipped() edges, so roughly half of each label's pill was cut
+    // off. bottomInset is larger than topInset so "now" also clears the
+    // frequency axis's bottom label row instead of overlapping it.
     private var timeAxisLabels: some View {
         GeometryReader { proxy in
+            let topInset: CGFloat = 12
+            let bottomInset: CGFloat = 28
+            let usableHeight = proxy.size.height - topInset - bottomInset
             ForEach(gridlines, id: \.secondsAgo) { gridline in
-                let y = proxy.size.height * (1 - gridline.normalizedPosition)
+                let y = topInset + usableHeight * (1 - gridline.normalizedPosition)
                 Rectangle()
                     .fill(theme.text.opacity(0.12))
                     .frame(height: 1)

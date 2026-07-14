@@ -32,12 +32,6 @@ struct AppShellView: View {
         .environment(\.theme, theme)
         .environment(trackedFrequencyViewModel)
         .environment(appearanceSettings)
-        .task {
-            // System default input device only for now -- explicit Input
-            // Device selection is ticket #4. Starts the shared capture ->
-            // FFT -> tracking pipeline (ADR 0002) for the whole app shell.
-            trackedFrequencyViewModel.start()
-        }
     }
 }
 

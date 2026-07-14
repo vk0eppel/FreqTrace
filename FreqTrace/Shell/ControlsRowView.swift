@@ -34,7 +34,7 @@ struct ControlsRowView: View {
     }
 
     private var line1: some View {
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             weightingControl
             timeAveragingControl
             peakResetControl
@@ -70,7 +70,7 @@ struct ControlsRowView: View {
     // sunlight. Writes straight to AppearanceSettings.mode, which
     // AppShellView turns into the injected Theme every view reads.
     private var appearanceControl: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 10) {
             Text("APPEARANCE")
                 .font(.system(size: Typography.controlSize, weight: .medium))
                 .foregroundStyle(theme.textDim)
@@ -78,7 +78,7 @@ struct ControlsRowView: View {
                 appearanceButton(mode)
             }
         }
-        .padding(.horizontal, 18)
+        .consolePlate()
     }
 
     private func appearanceButton(_ mode: AppearanceMode) -> some View {
@@ -86,15 +86,12 @@ struct ControlsRowView: View {
         return Button {
             appearanceSettings.mode = mode
         } label: {
-            Text(mode.rawValue.uppercased())
-                .font(.system(size: Typography.controlSize, weight: .semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .foregroundStyle(isSelected ? theme.bg : theme.textDim)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isSelected ? theme.accent : Color.clear)
-                )
+            HStack(spacing: 4) {
+                LEDIndicator(isLit: isSelected)
+                Text(mode.rawValue.uppercased())
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(isSelected ? theme.text : theme.textDim)
+            }
         }
         .buttonStyle(.plain)
     }
@@ -106,7 +103,12 @@ struct ControlsRowView: View {
     // device here, including from the disconnected state, re-points the
     // live pipeline and persists the choice as the new default.
     private var inputDeviceControl: some View {
-        HStack(spacing: 6) {
+        let isDisconnected: Bool = {
+            if case .disconnected = trackedFrequencyViewModel.connectionState { return true }
+            return false
+        }()
+        return HStack(spacing: 6) {
+            LEDIndicator(isLit: true, color: isDisconnected ? theme.danger : nil)
             Text("INPUT")
                 .font(.system(size: Typography.controlSize, weight: .medium))
                 .foregroundStyle(theme.textDim)
@@ -124,13 +126,13 @@ struct ControlsRowView: View {
             }
             .fixedSize()
 
-            if case .disconnected = trackedFrequencyViewModel.connectionState {
+            if isDisconnected {
                 Text("DISCONNECTED")
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(theme.danger)
             }
         }
-        .padding(.horizontal, 18)
+        .consolePlate()
     }
 
     private var selectedInputDeviceName: String {
@@ -149,8 +151,12 @@ struct ControlsRowView: View {
     // disconnect behavior (ADR 0006): the disconnected indicator appears
     // rather than silently falling back to another output.
     private var outputDeviceControl: some View {
-        HStack(spacing: 6) {
-            if case .disconnected = signalGenerator.connectionState {
+        let isDisconnected: Bool = {
+            if case .disconnected = signalGenerator.connectionState { return true }
+            return false
+        }()
+        return HStack(spacing: 6) {
+            if isDisconnected {
                 Text("DISCONNECTED")
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(theme.danger)
@@ -172,8 +178,9 @@ struct ControlsRowView: View {
             Text("OUTPUT")
                 .font(.system(size: Typography.controlSize, weight: .medium))
                 .foregroundStyle(theme.textDim)
+            LEDIndicator(isLit: true, color: isDisconnected ? theme.danger : nil)
         }
-        .padding(.horizontal, 18)
+        .consolePlate()
     }
 
     private var selectedOutputDeviceName: String {
@@ -189,7 +196,7 @@ struct ControlsRowView: View {
     // changes -- post-FFT frame-blending, never changes FFT window
     // size/resolution.
     private var timeAveragingControl: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 10) {
             Text("TIME AVG")
                 .font(.system(size: Typography.controlSize, weight: .medium))
                 .foregroundStyle(theme.textDim)
@@ -197,7 +204,7 @@ struct ControlsRowView: View {
                 timeAveragingButton(preset)
             }
         }
-        .padding(.horizontal, 18)
+        .consolePlate()
     }
 
     private func timeAveragingButton(_ preset: TimeAveragingPreset) -> some View {
@@ -205,15 +212,12 @@ struct ControlsRowView: View {
         return Button {
             trackedFrequencyViewModel.timeAveraging = preset
         } label: {
-            Text(preset.rawValue.uppercased())
-                .font(.system(size: Typography.controlSize, weight: .semibold))
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .foregroundStyle(isSelected ? theme.bg : theme.textDim)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isSelected ? theme.accent : Color.clear)
-                )
+            HStack(spacing: 4) {
+                LEDIndicator(isLit: isSelected)
+                Text(preset.rawValue.uppercased())
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(isSelected ? theme.text : theme.textDim)
+            }
         }
         .buttonStyle(.plain)
     }
@@ -229,26 +233,25 @@ struct ControlsRowView: View {
             Text("PEAK RESET")
                 .font(.system(size: Typography.controlSize, weight: .semibold))
                 .foregroundStyle(theme.textDim)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
         }
         .buttonStyle(.plain)
-        .padding(.horizontal, 8)
+        .consolePlate()
     }
 
     // Freeze + Stop (ticket #13, CONTEXT.md "Freeze" / "Stop"): two
     // independent controls, deliberately not one. Freeze toggles on/off in
     // place (pipeline keeps running underneath -- see
     // AudioPipelineViewModel.toggleFreeze for the instant-catch-up
-    // behavior). Stop halts capture and swaps its own label to "Resume,"
-    // which re-initializes capture against the currently-selected Input
-    // Device rather than picking a new one.
+    // behavior). Stop halts capture and swaps its own label to "Start"
+    // (user report: reads as a Stop/Start toggle, not Stop/Resume), which
+    // re-initializes capture against the currently-selected Input Device
+    // rather than picking a new one.
     private var freezeStopControl: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 14) {
             freezeButton
             stopButton
         }
-        .padding(.horizontal, 18)
+        .consolePlate()
     }
 
     private var freezeButton: some View {
@@ -256,19 +259,20 @@ struct ControlsRowView: View {
         return Button {
             trackedFrequencyViewModel.toggleFreeze()
         } label: {
-            Text("FREEZE")
-                .font(.system(size: Typography.controlSize, weight: .semibold))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .foregroundStyle(isFrozen ? theme.bg : theme.textDim)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isFrozen ? theme.accent : Color.clear)
-                )
+            HStack(spacing: 4) {
+                LEDIndicator(isLit: isFrozen)
+                Text("FREEZE")
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(isFrozen ? theme.text : theme.textDim)
+            }
         }
         .buttonStyle(.plain)
     }
 
+    // Stop/Start's LED reads as a tally light (lit red while capture is
+    // actively running), not the shared amber "selected" language every
+    // other toggle in this row uses -- this is an engine-running state, not
+    // a passing preference.
     private var stopButton: some View {
         let isActive = trackedFrequencyViewModel.isCaptureActive
         return Button {
@@ -278,15 +282,12 @@ struct ControlsRowView: View {
                 trackedFrequencyViewModel.resumeCapture()
             }
         } label: {
-            Text(isActive ? "STOP" : "RESUME")
-                .font(.system(size: Typography.controlSize, weight: .semibold))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .foregroundStyle(isActive ? theme.danger : theme.bg)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isActive ? Color.clear : theme.accent)
-                )
+            HStack(spacing: 4) {
+                LEDIndicator(isLit: isActive, color: theme.danger)
+                Text(isActive ? "STOP" : "START")
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(isActive ? theme.danger : theme.textDim)
+            }
         }
         .buttonStyle(.plain)
     }
@@ -302,7 +303,7 @@ struct ControlsRowView: View {
     // setting, default A. Selecting a value here changes which frequency
     // reads as loudest in the Tracked Frequency readout.
     private var weightingControl: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 10) {
             Text("WEIGHTING")
                 .font(.system(size: Typography.controlSize, weight: .medium))
                 .foregroundStyle(theme.textDim)
@@ -310,7 +311,7 @@ struct ControlsRowView: View {
                 weightingButton(option)
             }
         }
-        .padding(.horizontal, 18)
+        .consolePlate()
     }
 
     private func weightingButton(_ option: Weighting) -> some View {
@@ -318,11 +319,12 @@ struct ControlsRowView: View {
         return Button {
             trackedFrequencyViewModel.weighting = option
         } label: {
-            Text(option.rawValue)
-                .font(.system(size: Typography.controlSize, weight: .semibold, design: .monospaced))
-                .frame(width: 22, height: 22)
-                .foregroundStyle(isSelected ? theme.bg : theme.textDim)
-                .background(Circle().fill(isSelected ? theme.accent : Color.clear))
+            HStack(spacing: 4) {
+                LEDIndicator(isLit: isSelected)
+                Text(option.rawValue)
+                    .font(.system(size: Typography.controlSize, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(isSelected ? theme.text : theme.textDim)
+            }
         }
         .buttonStyle(.plain)
     }

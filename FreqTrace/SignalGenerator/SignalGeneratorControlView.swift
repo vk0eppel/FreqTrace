@@ -24,14 +24,7 @@ struct SignalGeneratorControlView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            Picker("Waveform", selection: $engine.waveform) {
-                ForEach(Waveform.allCases) { waveform in
-                    Text(waveform.displayName).tag(waveform)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 148)
+            waveformControl
 
             if engine.waveform == .sine {
                 sineFrequencyControl
@@ -52,7 +45,34 @@ struct SignalGeneratorControlView: View {
         }
         .font(.system(size: Typography.controlSize, weight: .medium))
         .foregroundStyle(theme.text)
-        .padding(.horizontal, 18)
+        .consolePlate()
+    }
+
+    // Waveform picker (ticket #9): rendered as its own row of lit-LED
+    // buttons rather than a native segmented control, matching the same
+    // "one lit indicator = one active state" language used by every other
+    // toggle in the Controls row (see ConsoleModule.swift).
+    private var waveformControl: some View {
+        HStack(spacing: 10) {
+            ForEach(Waveform.allCases) { waveform in
+                waveformButton(waveform)
+            }
+        }
+    }
+
+    private func waveformButton(_ waveform: Waveform) -> some View {
+        let isSelected = engine.waveform == waveform
+        return Button {
+            engine.waveform = waveform
+        } label: {
+            HStack(spacing: 4) {
+                LEDIndicator(isLit: isSelected)
+                Text(waveform.displayName.uppercased())
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(isSelected ? theme.text : theme.textDim)
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     // Sine frequency control (ticket #14, CONTEXT.md "ISO Band"): step

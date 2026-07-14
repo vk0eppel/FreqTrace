@@ -165,18 +165,27 @@ final class AudioPipelineViewModel {
         self.ringBuffer = ringBuffer
         self.pipeline = AudioAnalysisPipeline(config: config, ringBuffer: ringBuffer, weighting: .default)
         self.captureEngine = MicrophoneCaptureEngine(ringBuffer: ringBuffer)
+
+        // Device enumeration runs unconditionally from init (matching
+        // SignalGeneratorEngine's Output Device setup) so the Input Device
+        // picker is populated immediately, even though capture itself no
+        // longer auto-starts (see `start()` -- the app now launches with
+        // measurements off, user presses Start).
+        deviceEnumerator.onChange = { [weak self] in self?.refreshAvailableDevices() }
+        deviceEnumerator.startObserving()
+        refreshAvailableDevices()
     }
 
     /// Starts capturing and streaming analysis updates. Resolves which
     /// input device to use (AudioDeviceSelector) from the persisted last
     /// explicit choice, falling back to the system default. Safe to call
-    /// multiple times; a no-op once already running.
+    /// multiple times; a no-op once already running. The app no longer
+    /// calls this automatically at launch (user decision: measurements
+    /// start off, so an explicit Start press -- not app open -- is what
+    /// triggers the mic permission prompt) -- it's reached via the Stop/
+    /// Start button's `resumeCapture()` falling back here on a cold launch.
     func start() {
         guard !isCaptureActive else { return }
-
-        deviceEnumerator.onChange = { [weak self] in self?.refreshAvailableDevices() }
-        deviceEnumerator.startObserving()
-        refreshAvailableDevices()
 
         guard let deviceID = AudioDeviceSelector.resolve(
             availableDevices: availableInputDevices,
