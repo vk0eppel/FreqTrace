@@ -20,6 +20,9 @@
 import CoreAudio
 import Foundation
 import Observation
+import os
+
+private let diagLog = Logger(subsystem: "com.freqtrace.diagnostic", category: "viewmodel")
 
 @MainActor
 @Observable
@@ -46,6 +49,18 @@ final class AudioPipelineViewModel {
     /// only until the first hop arrives; harmless since latestMagnitudes
     /// is empty until then too.
     private(set) var fullScalePower: Float = 1
+    /// Cached per-hop RTA bar values (perf fix, user request "reduce CPU
+    /// load"): RTABinning.bars(...) was independently recomputed by three
+    /// separate call sites every hop -- this class's own peak-tracking scan
+    /// below, RTAView's Canvas render, and WaterfallZoneView's hover
+    /// overlay -- even though all three want the exact same array for the
+    /// exact same hop. Computed once in apply(); RTAView and the hover
+    /// overlay now just read this instead. Kept in sync with
+    /// bandingResolution's didSet (recomputed immediately from the last
+    /// known magnitudes, not just on the next hop) so a resolution switch
+    /// never leaves this array's length mismatched against
+    /// RTABinning.bandEdges(barsPerOctave:)'s current bar count.
+    private(set) var latestRTABars: [Float] = []
     /// The SPL meter's manual numeric offset (CONTEXT.md "SPL Offset"),
     /// default 0 -- no real calibration in v1 (ADR 0003); this is a bare
     /// user-entered value, not derived from anything.
@@ -142,6 +157,11 @@ final class AudioPipelineViewModel {
                 if case .rtaBar = key { return true }
                 return false
             }
+            // Recomputed immediately, not left for the next hop -- latestRTABars
+            // must never sit at the old bar count while RTAView/the hover
+            // overlay already query bandEdges(barsPerOctave:) at the new one
+            // (out-of-bounds risk if the two length-mismatch).
+            latestRTABars = RTABinning.bars(magnitudes: latestMagnitudes, config: config, barsPerOctave: bandingResolution.rawValue, fullScalePower: fullScalePower)
         }
     }
 
@@ -165,15 +185,138 @@ final class AudioPipelineViewModel {
         }
     }
 
+    /// Selectable FFT window size (user request, FFTWindowSize.swift): not
+    /// a lightweight hot-swap like weighting/timeAveraging above -- window
+    /// size drives buffer sizing baked into init (FrequencyTracker's vDSP
+    /// FFT setup, AudioAnalysisPipeline's rollingWindow, WaterfallRenderer's
+    /// GPU texture dimensions), none of which have a resize path. Changing
+    /// this tears down and rebuilds the pipeline (and, via WaterfallZoneView
+    /// reacting to `config` changing, the waterfall renderer), restarting
+    /// capture if it was running -- closer to Stop->Start than a simple
+    /// property mutation, acceptable since this is an infrequent, deliberate
+    /// setting change, not a per-frame concern.
+    var fftWindowSize: FFTWindowSize = .default {
+        didSet {
+            guard fftWindowSize != oldValue else { return }
+            applyFFTWindowSizeChange()
+        }
+    }
+
+    /// Chains switch operations so at most one is ever in flight (bug fix,
+    /// second one -- user report: switching FFT size repeatedly eventually
+    /// froze the pipeline again even after the first fix below). Without
+    /// this, clicking a second FFT size before the first switch's Task had
+    /// finished captured the *same* `pipeline` as `oldPipeline` for both
+    /// (since the first switch hadn't reassigned `self.pipeline` yet) --
+    /// whichever Task's continuation resumed last "won" the final
+    /// self.pipeline assignment, silently leaking the other Task's
+    /// freshly-built pipeline, which was never explicitly stopped and kept
+    /// reading the shared ring buffer alongside the winner -- the exact
+    /// same dual-consumer corruption the explicit oldPipeline.stop() below
+    /// was meant to prevent, just reintroduced via overlapping switches
+    /// instead of a single one.
+    private var pendingFFTSwitchTask: Task<Void, Never>?
+
+    private func applyFFTWindowSizeChange() {
+        let requestedSize = fftWindowSize
+        let previousTask = pendingFFTSwitchTask
+        pendingFFTSwitchTask = Task { [weak self] in
+            // Wait for any in-flight switch to fully finish (including its
+            // own capture restart) before this one reads any state --
+            // guarantees oldPipeline below is always whatever the most
+            // recent switch actually left behind, never a stale snapshot
+            // racing against it.
+            await previousTask?.value
+            guard let self else { return }
+            guard self.fftWindowSize == requestedSize else {
+                // Superseded by an even newer selection while this one was
+                // queued -- let that one own the final state; nothing here
+                // has touched the pipeline yet, so there's nothing to undo.
+                return
+            }
+
+            let wasRunning = self.isCaptureActive
+            let deviceID = self.selectedInputDeviceID
+            let oldPipeline = self.pipeline
+            self.haltCapture()
+            let newConfig = requestedSize.config(sampleRate: self.config.sampleRate)
+
+            // Bug fix (user report: "waterfall and rta freeze and no more
+            // Tracked Frequency or SPL measures" after switching FFT
+            // size): haltCapture() above only cancels the view model's
+            // *consumer* streamTask, which indirectly tears down
+            // oldPipeline's internal pollTask via AsyncStream's
+            // onTermination -- not guaranteed to happen before the code
+            // below starts a brand-new pipeline reading the same shared
+            // ringBuffer. AudioRingBuffer is explicitly single-consumer
+            // (see its own header comment on the race its read()/
+            // readIndex discipline was built to prevent); two pipelines
+            // racing to read it corrupts that invariant and both end up
+            // stuck, never seeing a clean full hop again. Explicitly
+            // awaiting the old pipeline's stop() first guarantees it has
+            // actually stopped reading before the new one starts.
+            await oldPipeline.stop()
+
+            self.config = newConfig
+            // A brand-new AudioAnalysisPipeline also means a brand-new
+            // internal AnomalyDetector/TimeAveragingBlender, so stale
+            // tracking state from the old window size can't leak into the
+            // new one. peakTracker's held peaks are deliberately left
+            // untouched (Peak is "indefinite hold" per CONTEXT.md; only
+            // PEAK RESET should clear it -- window size doesn't invalidate
+            // what's still a valid highest-level-seen for a given
+            // frequency band).
+            self.pipeline = AudioAnalysisPipeline(config: newConfig, ringBuffer: self.ringBuffer, weighting: self.weighting, timeAveraging: self.timeAveraging)
+            guard wasRunning else { return }
+            if let deviceID {
+                self.startCapture(deviceID: deviceID, persistChoice: false)
+            } else {
+                self.start()
+            }
+        }
+    }
+
     /// FFT configuration in effect -- the waterfall needs this to map FFT
-    /// bins to frequencies (see FrequencyAxis).
-    let config: AnalysisConfig
+    /// bins to frequencies (see FrequencyAxis). var, not let (was let until
+    /// FFT size became selectable) -- applyFFTWindowSizeChange() below
+    /// reassigns it, but external readers (WaterfallZoneView, RTAView, the
+    /// hover overlay) only ever read it, so it stays private(set).
+    private(set) var config: AnalysisConfig
 
     private let ringBuffer: AudioRingBuffer
-    private let pipeline: AudioAnalysisPipeline
+    /// var, not let (was let until FFT size became selectable) --
+    /// applyFFTWindowSizeChange() below rebuilds this from scratch, since
+    /// FrequencyTracker's vDSP FFT setup and AudioAnalysisPipeline's
+    /// rollingWindow are both sized at construction time with no resize
+    /// path. ringBuffer/captureEngine stay `let`: ring buffer capacity only
+    /// depends on sampleRate, unaffected by window/hop size.
+    private var pipeline: AudioAnalysisPipeline
     private let captureEngine: MicrophoneCaptureEngine
     private let deviceEnumerator = AudioDeviceEnumerator(scope: .input)
     private var streamTask: Task<Void, Never>?
+    /// Self-healing watchdog (bug fix -- diagnosed via log instrumentation,
+    /// user report: waterfall/RTA/Tracked Frequency permanently froze after
+    /// rapidly switching FFT window size a few times in a row). Confirmed
+    /// root cause via [DIAG] logging: AudioRingBuffer's writeIndex stopped
+    /// advancing forever partway through a restart -- MicrophoneCaptureEngine's
+    /// freshly-constructed AVAudioEngine (already a fix for an earlier,
+    /// related tap-death report) silently stopped delivering tap buffers,
+    /// with no error thrown and no further "tap fired" callbacks at all.
+    /// This is a known AVAudioEngine robustness gap when a device is
+    /// torn down and rebound in quick succession, not something fixable by
+    /// getting our own ring-buffer bookkeeping more correct (that part was
+    /// already verified sound) -- so instead of trying to prevent every way
+    /// AVAudioEngine can wedge itself, this watches for the *symptom*
+    /// (no hop delivered in a while, even though capture is supposed to be
+    /// running) and transparently restarts capture, the same recovery a
+    /// tech would perform by hand via Stop->Start.
+    private var watchdogTask: Task<Void, Never>?
+    /// Updated on every hop the pipeline actually delivers (receive(_:)),
+    /// unconditionally -- including while frozen -- so Freeze (which
+    /// intentionally withholds published updates) is never mistaken for a
+    /// stall.
+    private var lastHopAt: Date?
+    private static let stallTimeout: TimeInterval = 3
 
     /// Persists the tech's last explicit Input Device choice across
     /// launches (CONTEXT.md "Input Device").
@@ -283,6 +426,20 @@ final class AudioPipelineViewModel {
                 self?.receive(result)
             }
         }
+
+        lastHopAt = Date()
+        watchdogTask?.cancel()
+        watchdogTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                guard let self, !Task.isCancelled, self.isCaptureActive else { continue }
+                guard let lastHopAt = self.lastHopAt,
+                      Date().timeIntervalSince(lastHopAt) > Self.stallTimeout else { continue }
+                guard let deviceID = self.selectedInputDeviceID else { continue }
+                diagLog.notice("Watchdog: no hop in \(Self.stallTimeout, privacy: .public)s, restarting capture at device=\(deviceID, privacy: .public)")
+                self.startCapture(deviceID: deviceID, persistChoice: false)
+            }
+        }
     }
 
     /// Routes one hop's result through `freezeGate`: published immediately
@@ -290,6 +447,7 @@ final class AudioPipelineViewModel {
     /// the pipeline itself never knows or cares whether the display is
     /// frozen.
     private func receive(_ result: AnalysisResult) {
+        lastHopAt = Date()
         guard let toPublish = freezeGate.receive(result) else { return }
         apply(toPublish)
     }
@@ -316,6 +474,7 @@ final class AudioPipelineViewModel {
         // (CONTEXT.md "Peak"), not paused whenever the tech is looking at
         // the waterfall instead (found by code review).
         let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config, barsPerOctave: bandingResolution.rawValue, fullScalePower: result.fullScalePower)
+        latestRTABars = bars
         for (index, value) in bars.enumerated() {
             peakTracker.update(value, for: .rtaBar(index))
         }
@@ -353,6 +512,8 @@ final class AudioPipelineViewModel {
     private func haltCapture() {
         streamTask?.cancel()
         streamTask = nil
+        watchdogTask?.cancel()
+        watchdogTask = nil
         captureEngine.stop()
         guard !isFrozen else { return }
         trackedFrequencyHz = nil

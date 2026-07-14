@@ -26,7 +26,18 @@ nonisolated struct AnalysisConfig: Sendable, Equatable {
     /// default window size).
     var hopSize: Int
 
-    static let `default` = AnalysisConfig(sampleRate: 48_000, windowSize: 4096, hopSize: 2048)
+    // Derived from FFTWindowSize.default (user request: FFT size became a
+    // live-selectable setting, FFTWindowSize.swift) rather than duplicating
+    // "8192/4096" here separately -- single source of truth for the
+    // pipeline's starting resolution. Widened from the original 4096/2048
+    // (user request: low-frequency RTA bars near 40Hz at 1/12 octave were
+    // narrower than the old ~11.7Hz bin width, so several adjacent bars
+    // unavoidably shared one bin's value). 8192/4096 halves bin width to
+    // ~5.9Hz while preserving the 50% overlap, at the cost of roughly
+    // doubling hop latency -- see AnomalyDetector's sustainFrameCount(for:),
+    // which was hardcoded against the old hop duration and had to be made
+    // duration-derived to compensate.
+    static let `default` = FFTWindowSize.default.config(sampleRate: 48_000)
 
     /// Frequency width of one FFT bin, i.e. the best-case resolution of the
     /// Tracked Frequency readout at this configuration.

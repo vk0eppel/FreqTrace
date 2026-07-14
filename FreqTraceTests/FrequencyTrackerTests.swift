@@ -14,7 +14,7 @@ import Testing
 
 struct FrequencyTrackerTests {
 
-    private let config = AnalysisConfig.default // 48kHz / 4096-window / 2048-hop
+    private let config = AnalysisConfig.default // 48kHz / 8192-window / 4096-hop
     private var binResolutionHz: Double { config.binResolutionHz } // ~11.72 Hz
 
     // Reuses FrequencyTracker.sineWave(...) via @testable import rather
@@ -206,6 +206,46 @@ struct FrequencyTrackerTests {
         let dcOnly: [Float] = [1.0]
 
         #expect(tracker.trackedFrequencyLevelDb(fromMagnitudes: dcOnly, weighting: .z) == nil)
+    }
+}
+
+// Regression coverage (user report: "the highest [FFT size] value just
+// freeze") -- diagnosis traced this to FFTWindowSize not being marked
+// `nonisolated`, so this module's default @MainActor isolation applied to
+// it, making AnalysisConfig.default's initializer (`FFTWindowSize.default.
+// config(sampleRate:)`) a real actor-isolation violation -- silently only a
+// warning today ("this is an error in the Swift 6 language mode"), not a
+// hard compile error, which is exactly the kind of undefined cross-actor
+// access that produces intermittent hangs. This struct isn't @MainActor
+// (Swift Testing test types aren't, unless annotated), so it exercises
+// FFTWindowSize/FrequencyTracker construction from a genuinely nonisolated
+// context the same way AudioAnalysisPipeline's background actor does --
+// if FFTWindowSize (or a similarly-shaped future type) loses its
+// `nonisolated` again, this reintroduces the same warning class, and
+// results below would stop resolving correctly if the isolation mismatch
+// ever became a hard failure rather than a silently-tolerated one.
+struct FFTWindowSizeTests {
+
+    @Test(arguments: FFTWindowSize.allCases)
+    func constructsAWorkingFrequencyTrackerAtEverySize(_ size: FFTWindowSize) throws {
+        let config = size.config(sampleRate: 48_000)
+        #expect(config.windowSize == size.windowSize)
+        #expect(config.hopSize == size.hopSize)
+
+        let tracker = FrequencyTracker(config: config)
+        let samples = FrequencyTracker.sineWave(frequency: 1000, sampleRate: config.sampleRate, count: config.windowSize)
+        let frequency = try #require(tracker.trackedFrequency(in: samples, weighting: .z))
+        #expect(abs(frequency - 1000) <= config.binResolutionHz)
+    }
+
+    @Test func fiftyPercentOverlapAtEverySize() {
+        for size in FFTWindowSize.allCases {
+            #expect(size.hopSize == size.windowSize / 2)
+        }
+    }
+
+    @Test func defaultMatchesAnalysisConfigDefault() {
+        #expect(AnalysisConfig.default == FFTWindowSize.default.config(sampleRate: AnalysisConfig.default.sampleRate))
     }
 }
 

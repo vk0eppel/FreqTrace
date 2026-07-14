@@ -64,12 +64,13 @@ actor AudioAnalysisPipeline {
     private var anomalyDetector = AnomalyDetector()
     private var pollTask: Task<Void, Never>?
 
-    init(config: AnalysisConfig, ringBuffer: AudioRingBuffer, weighting: Weighting = .default) {
+    init(config: AnalysisConfig, ringBuffer: AudioRingBuffer, weighting: Weighting = .default, timeAveraging: TimeAveragingPreset = .fast) {
         self.config = config
         self.ringBuffer = ringBuffer
         self.tracker = FrequencyTracker(config: config)
         self.rollingWindow = [Float](repeating: 0, count: config.windowSize)
         self.weighting = weighting
+        self.timeAveraging = timeAveraging
     }
 
     func setWeighting(_ weighting: Weighting) {
@@ -110,9 +111,37 @@ actor AudioAnalysisPipeline {
             guard read == config.hopSize else {
                 // Not enough new samples yet -- wait roughly one hop's worth
                 // of real time before checking again rather than busy-polling.
+                // If this persists (the underlying AVAudioEngine tap died --
+                // see MicrophoneCaptureEngine's header comment), AudioPipeline
+                // ViewModel's watchdog notices no hop has been delivered in a
+                // while and restarts capture; this loop doesn't need to know
+                // that's happening, it just keeps polling.
                 try? await Task.sleep(nanoseconds: 5_000_000)
                 continue
             }
+
+            // Bug fix (root cause of both remaining reports -- "16384
+            // still freezes" and inconsistent tracked frequency after
+            // switching): this loop's success path had no suspension
+            // point at all, only the failure path (the Task.sleep above).
+            // When reads keep succeeding -- true whenever hopSize is small
+            // enough that the ring buffer almost always has enough new
+            // data already (confirmed via log instrumentation: a 1024-hop
+            // pipeline logged 200+ hops in ~5s with no failed reads) --
+            // this actor never naturally suspends, so it never yields its
+            // executor to any OTHER queued work on the same actor. That
+            // starves AudioPipelineViewModel's `await oldPipeline.stop()`
+            // (queued on this same actor when a new FFT size is selected)
+            // indefinitely: the old, small-hopSize pipeline keeps winning
+            // the race for every new ring-buffer sample in tiny chunks,
+            // so a newly-started, larger-hopSize pipeline can never
+            // accumulate enough to complete a single read, and the
+            // cancellation that's supposed to stop the old one never gets
+            // a chance to run. An explicit yield every iteration (not just
+            // on failure) guarantees cancellation is observed promptly
+            // regardless of read-success rate.
+            await Task.yield()
+            guard !Task.isCancelled else { break }
 
             rollingWindow.removeFirst(config.hopSize)
             rollingWindow.append(contentsOf: hopBuffer)

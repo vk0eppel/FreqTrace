@@ -106,12 +106,21 @@ struct AnomalyCandidate: Identifiable, Equatable, Sendable {
 /// over a rolling frame window"). Value type -- callers (AudioAnalysisPipeline)
 /// own the mutable instance across hops.
 struct AnomalyDetector: Sendable {
-    /// Consecutive frames a narrowband, harmonically-unrelated peak must
-    /// hold (flat-or-growing) before promotion. Not spec'd -- 8 frames at
-    /// this pipeline's ~43ms hop cadence (2048 samples @ 48kHz) is
-    /// ~350ms, long enough to reject a single transient hit while still
-    /// catching a feedback ring building quickly.
-    static let sustainFrameCount = 8
+    /// ~350ms sustain window (ADR 0001), long enough to reject a single
+    /// transient hit while still catching a feedback ring building
+    /// quickly. Expressed as a duration and converted to frames via the
+    /// current config's hop duration, not a raw hardcoded frame count --
+    /// it used to be `static let sustainFrameCount = 8`, correct only
+    /// because it assumed the hop duration in effect when it was written
+    /// (2048 samples @ 48kHz ≈ 43ms); AnalysisConfig.default later
+    /// widening its hopSize would have silently doubled this detector's
+    /// real-world sustain window to ~700ms as an unrelated side effect.
+    static let sustainDurationSeconds: Double = 0.35
+
+    static func sustainFrameCount(for config: AnalysisConfig) -> Int {
+        let hopDurationSeconds = Double(config.hopSize) / config.sampleRate
+        return max(1, Int((sustainDurationSeconds / hopDurationSeconds).rounded()))
+    }
 
     /// How many consecutive misses a track tolerates before being dropped
     /// entirely, rather than reset on the very first missed frame -- a
@@ -179,8 +188,9 @@ struct AnomalyDetector: Sendable {
         }
 
         let binHz = config.sampleRate / Double(config.windowSize)
+        let sustainFrameCount = Self.sustainFrameCount(for: config)
         let candidates = tracks.values
-            .filter { $0.consecutiveFrames >= Self.sustainFrameCount }
+            .filter { $0.consecutiveFrames >= sustainFrameCount }
             .map { AnomalyCandidate(frequencyHz: Double($0.bin) * binHz, severityDb: $0.lastMagnitudeDb) }
             .sorted { $0.severityDb > $1.severityDb }
 

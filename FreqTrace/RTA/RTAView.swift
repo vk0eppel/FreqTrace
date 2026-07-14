@@ -33,12 +33,12 @@ struct RTAView: View {
     var body: some View {
         Canvas { context, size in
             let barsPerOctave = pipeline.bandingResolution.rawValue
-            let bars = RTABinning.bars(
-                magnitudes: pipeline.latestMagnitudes,
-                config: pipeline.config,
-                barsPerOctave: barsPerOctave,
-                fullScalePower: pipeline.fullScalePower
-            )
+            // Reads AudioPipelineViewModel's cached per-hop bars (perf fix)
+            // rather than recomputing RTABinning.bars itself -- apply(_:)
+            // already scans the same magnitudes for peak tracking every hop,
+            // and bandingResolution's didSet keeps this in sync immediately
+            // on a resolution change, so it's never stale here.
+            let bars = pipeline.latestRTABars
             guard !bars.isEmpty else { return }
 
             // Positioned by each bar's actual (1kHz-anchored) frequency

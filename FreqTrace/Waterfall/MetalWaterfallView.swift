@@ -37,14 +37,23 @@ struct MetalWaterfallView: NSViewRepresentable {
     /// none of the Metal-side remap math or texture sizing needs to change.
     var bandingResolution: RTABandingResolution = .oneOverTwelve
 
-    func makeCoordinator() -> WaterfallRenderer {
-        renderer
-    }
-
+    // No Coordinator: makeCoordinator() only ever runs once for the MTKView's
+    // lifetime, so caching `renderer` there (as this used to) left the
+    // MTKView's delegate permanently pinned to whichever WaterfallRenderer
+    // existed on first appearance -- WaterfallZoneView rebuilds `renderer`
+    // with a new GPU texture/columnCount/binResolutionHz whenever FFT window
+    // size changes (its `.task(id: pipeline.config)`), but updateNSView kept
+    // pushing freshly-sized magnitude frames into the *old*, differently-
+    // sized renderer, which silently mis-mapped bins to the wrong frequency
+    // (e.g. a real 1kHz peak reading as 2kHz/4kHz as window size grew -- bug
+    // report: "1kHz sig gen reads 2k on waterfall at 8192, 4k at 16384").
+    // Always reading `renderer` (this struct's own property, fresh on every
+    // SwiftUI re-render) instead of `context.coordinator` keeps the MTKView
+    // wired to whichever renderer WaterfallZoneView currently owns.
     func makeNSView(context: Context) -> MTKView {
         let view = MTKView()
         view.device = MTLCreateSystemDefaultDevice()
-        view.delegate = context.coordinator
+        view.delegate = renderer
         view.colorPixelFormat = .bgra8Unorm
         view.clearColor = MTLClearColorMake(0, 0, 0, 1)
         view.preferredFramesPerSecond = 30
@@ -54,9 +63,13 @@ struct MetalWaterfallView: NSViewRepresentable {
     }
 
     func updateNSView(_ nsView: MTKView, context: Context) {
-        context.coordinator.setAppearanceMode(appearanceMode)
+        // Re-assigned every update (cheap, idempotent when unchanged) so a
+        // renderer swap takes effect immediately rather than waiting on
+        // some other coordinator lifecycle event.
+        nsView.delegate = renderer
+        renderer.setAppearanceMode(appearanceMode)
         guard !magnitudes.isEmpty else { return }
         let stepped = RTABinning.steppedMagnitudes(magnitudes: magnitudes, config: config, barsPerOctave: bandingResolution.rawValue)
-        context.coordinator.pushMagnitudes(stepped, fullScalePower: fullScalePower)
+        renderer.pushMagnitudes(stepped, fullScalePower: fullScalePower)
     }
 }

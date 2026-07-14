@@ -36,6 +36,7 @@ struct ControlsRowView: View {
     private var line1: some View {
         HStack(spacing: 8) {
             weightingControl
+            fftWindowSizeControl
             timeAveragingControl
             peakResetControl
             freezeStopControl
@@ -322,6 +323,43 @@ struct ControlsRowView: View {
             HStack(spacing: 4) {
                 LEDIndicator(isLit: isSelected)
                 Text(option.rawValue)
+                    .font(.system(size: Typography.controlSize, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(isSelected ? theme.text : theme.textDim)
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    // FFT Size (user request, FFTWindowSize.swift): the frequency-vs-time
+    // resolution tradeoff, made selectable rather than a fixed default --
+    // finer resolution for hunting a low-frequency ring, faster response
+    // for fast-moving material. A global, pipeline-wide setting like
+    // Weighting/Time Averaging (not per-view, unlike bandingResolution's
+    // placement in the graph zone), so it lives here in Line 1 too.
+    // Changing it restarts capture under the hood if it was running (see
+    // AudioPipelineViewModel.applyFFTWindowSizeChange) -- a heavier control
+    // than Weighting/Time Averaging's simple hot-swap, but reads/writes the
+    // same way from this view.
+    private var fftWindowSizeControl: some View {
+        HStack(spacing: 10) {
+            Text("FFT SIZE")
+                .font(.system(size: Typography.controlSize, weight: .medium))
+                .foregroundStyle(theme.textDim)
+            ForEach(FFTWindowSize.allCases) { option in
+                fftWindowSizeButton(option)
+            }
+        }
+        .consolePlate()
+    }
+
+    private func fftWindowSizeButton(_ option: FFTWindowSize) -> some View {
+        let isSelected = trackedFrequencyViewModel.fftWindowSize == option
+        return Button {
+            trackedFrequencyViewModel.fftWindowSize = option
+        } label: {
+            HStack(spacing: 4) {
+                LEDIndicator(isLit: isSelected)
+                Text(option.label)
                     .font(.system(size: Typography.controlSize, weight: .semibold, design: .monospaced))
                     .foregroundStyle(isSelected ? theme.text : theme.textDim)
             }

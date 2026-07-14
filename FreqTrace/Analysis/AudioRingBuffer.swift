@@ -63,10 +63,32 @@ nonisolated final class AudioRingBuffer: @unchecked Sendable {
         writeIndex.store(w + writeCount, ordering: .releasing)
     }
 
-    /// Called from the consumer (AudioAnalysisPipeline actor). Returns the
-    /// number of samples actually read, which may be less than `count` if
-    /// not enough data has been written yet. Single-writer discipline: this
-    /// is the only place `readIndex` is written.
+    /// Called from the consumer (AudioAnalysisPipeline actor). All-or-
+    /// nothing: returns `count` if that many samples were available, or `0`
+    /// otherwise -- it does NOT return (and consume) a partial amount.
+    /// Single-writer discipline: this is the only place `readIndex` is
+    /// written.
+    ///
+    /// Bug fix (root cause of "16384 [the largest FFT size] still
+    /// freezes", found via log instrumentation showing writeIndex and
+    /// readIndex locked in perfect step forever): this used to return a
+    /// partial read (`min(count, available, buffer.count)`) whenever less
+    /// than `count` was available, and -- critically -- still advanced
+    /// readIndex by that partial amount, discarding it. AudioAnalysisPipeline.
+    /// pollLoop's only caller only ever treats `read == config.hopSize`
+    /// (an exact match) as success; a partial return was already being
+    /// thrown away by the caller, but the samples themselves were also
+    /// gone from the buffer, unable to accumulate toward a future full
+    /// read. MicrophoneCaptureEngine's tap delivers ~4800 frames per
+    /// callback; every hopSize <= that (every FFTWindowSize except the
+    /// largest, whose hopSize is 8192) always had enough available in a
+    /// single write to satisfy one full read outright, so the partial-read
+    /// path was rarely hit in practice. hopSize=8192 needs roughly two tap
+    /// deliveries' worth -- but each time pollLoop polled in between, it
+    /// would immediately drain and discard whatever partial amount had
+    /// trickled in so far, so the two deliveries could never accumulate:
+    /// readIndex chased writeIndex forever, never falling behind by a full
+    /// hop.
     func read(into buffer: inout [Float], count: Int) -> Int {
         let w = writeIndex.load(ordering: .acquiring)
         var r = readIndex.load(ordering: .relaxed)
@@ -80,14 +102,13 @@ nonisolated final class AudioRingBuffer: @unchecked Sendable {
         }
 
         let available = max(0, w - r)
-        let readCount = min(count, available, buffer.count)
-        guard readCount > 0 else { return 0 }
+        guard count <= buffer.count, available >= count else { return 0 }
 
-        for i in 0..<readCount {
+        for i in 0..<count {
             buffer[i] = storage[(r + i) % capacity]
         }
 
-        readIndex.store(r + readCount, ordering: .releasing)
-        return readCount
+        readIndex.store(r + count, ordering: .releasing)
+        return count
     }
 }

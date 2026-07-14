@@ -72,8 +72,18 @@ struct WaterfallZoneView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
-        .onAppear {
-            guard waterfallRenderer == nil, let device = MTLCreateSystemDefaultDevice() else { return }
+        .task(id: pipeline.config) {
+            // Reactive, not just-once-in-onAppear (FFT size became
+            // selectable, user request): WaterfallRenderer's GPU texture
+            // dimensions are permanently fixed at init time (columnCount =
+            // config.windowSize / 2), so a windowSize change needs a whole
+            // new renderer + texture, not just a config update on the
+            // existing one. .task(id:) re-runs whenever pipeline.config
+            // (Equatable) changes, in addition to running once on first
+            // appearance. Losing in-progress waterfall history when this
+            // happens is expected, same as switching bandingResolution
+            // already clears RTA bar peaks.
+            guard let device = MTLCreateSystemDefaultDevice() else { return }
             waterfallRenderer = WaterfallRenderer(device: device, config: pipeline.config)
         }
     }
@@ -131,10 +141,10 @@ struct WaterfallZoneView: View {
             return HoverReadout(hz: hz, db: waterfallRenderer.magnitudeDb(secondsAgo: secondsAgo, hz: hz))
         case .rta:
             let barsPerOctave = pipeline.bandingResolution.rawValue
-            let bars = RTABinning.bars(
-                magnitudes: pipeline.latestMagnitudes, config: pipeline.config,
-                barsPerOctave: barsPerOctave, fullScalePower: pipeline.fullScalePower
-            )
+            // Reads the same cached per-hop bars RTAView now reads (perf
+            // fix) instead of an independent third recomputation of
+            // RTABinning.bars for the same hop's data.
+            let bars = pipeline.latestRTABars
             guard !bars.isEmpty else { return HoverReadout(hz: hz, db: nil) }
             let edges = RTABinning.bandEdges(barsPerOctave: barsPerOctave)
             guard let index = edges.firstIndex(where: { hz >= $0.lowerHz && hz <= $0.upperHz }) else {

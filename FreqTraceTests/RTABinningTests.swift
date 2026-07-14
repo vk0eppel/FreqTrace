@@ -24,7 +24,7 @@ import Testing
 
 struct RTABinningTests {
 
-    private let config = AnalysisConfig.default // 48kHz / 4096-window / 2048-hop
+    private let config = AnalysisConfig.default // 48kHz / 8192-window / 4096-hop
 
     /// Steps down from the 1kHz reference to FrequencyAxis.minHz, at
     /// `barsPerOctave` bands per octave -- also the array index of the
@@ -99,7 +99,7 @@ struct RTABinningTests {
     // pegging every bar to max regardless of actual loudness (reported by
     // the user as "RTA is out of window" / "everything looks too high").
     @Test func rawUnnormalizedVDSPScalePowerIsCorrectlyReferencedAgainstFullScalePower() {
-        // A realistic full-scale-tone raw power magnitude for a 4096-point
+        // A realistic full-scale-tone raw power magnitude for an 8192-point
         // FFT (order of magnitude only -- the exact vDSP constant doesn't
         // matter, what matters is it's nowhere near 1.0).
         let realisticFullScaleRawPower: Float = 4_000_000

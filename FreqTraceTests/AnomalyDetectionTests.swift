@@ -107,7 +107,7 @@ struct AnomalyDetectorTests {
         let toneBin = 500
         var lastCandidates: [AnomalyCandidate] = []
 
-        for _ in 0..<(AnomalyDetector.sustainFrameCount + 2) {
+        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) + 2) {
             lastCandidates = detector.process(magnitudes: spectrum(withPeaksAt: [(toneBin, 1.0)]), config: config)
         }
 
@@ -131,7 +131,7 @@ struct AnomalyDetectorTests {
         let bins: [(Int, Float)] = [(100, 1.0), (200, 0.6), (300, 0.4)]
         var lastCandidates: [AnomalyCandidate] = []
 
-        for _ in 0..<(AnomalyDetector.sustainFrameCount + 2) {
+        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) + 2) {
             lastCandidates = detector.process(magnitudes: spectrum(withPeaksAt: bins), config: config)
         }
 
@@ -144,7 +144,7 @@ struct AnomalyDetectorTests {
         let loudBin = 700
         var lastCandidates: [AnomalyCandidate] = []
 
-        for _ in 0..<(AnomalyDetector.sustainFrameCount + 2) {
+        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) + 2) {
             lastCandidates = detector.process(
                 magnitudes: spectrum(withPeaksAt: [(quietBin, 0.1), (loudBin, 1.0)]), config: config
             )
@@ -170,7 +170,7 @@ struct AnomalyDetectorTests {
         let toneBin = 500
 
         // Build up sustain progress right to the edge of promotion.
-        for _ in 0..<(AnomalyDetector.sustainFrameCount - 1) {
+        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) - 1) {
             _ = detector.process(magnitudes: spectrum(withPeaksAt: [(toneBin, 1.0)]), config: config)
         }
         // One missed frame (e.g. the peak momentarily fell at a bin
@@ -191,7 +191,7 @@ struct AnomalyDetectorTests {
         // Now two distinct peaks appear, both within +-1 bin of the
         // existing track -- must not silently collapse into one.
         var lastCandidates: [AnomalyCandidate] = []
-        for _ in 0..<(AnomalyDetector.sustainFrameCount + 2) {
+        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) + 2) {
             lastCandidates = detector.process(magnitudes: spectrum(withPeaksAt: [(499, 1.0), (501, 1.0)]), config: config)
         }
 

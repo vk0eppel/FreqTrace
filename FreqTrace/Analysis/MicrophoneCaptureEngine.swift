@@ -34,7 +34,21 @@ enum MicrophoneCaptureError: Error {
 
 @MainActor
 final class MicrophoneCaptureEngine {
-    private let engine = AVAudioEngine()
+    /// var, not let (bug fix -- diagnosed via log instrumentation, user
+    /// report: switching FFT size repeatedly eventually left capture
+    /// silently dead -- AudioRingBuffer.write's writeIndex simply stopped
+    /// advancing, forever, even though start() kept reporting success).
+    /// Repeatedly stop()/installTap()/start()-ing the SAME persistent
+    /// AVAudioEngine instance across several rapid reconfigurations (each
+    /// FFT size switch tears capture down and restarts it) eventually left
+    /// it no longer actually delivering tap buffers -- a known AVAudioEngine
+    /// robustness issue with reusing one engine across many rapid
+    /// reconfigurations, not specific to any particular FFT size (whichever
+    /// switch happened to be the Nth rapid one in a row was the one that hit
+    /// it). A brand-new engine constructed on every start() avoids
+    /// accumulating whatever bad internal state repeated reconfiguration of
+    /// one persistent instance was causing.
+    private var engine = AVAudioEngine()
     private let ringBuffer: AudioRingBuffer
     private(set) var isRunning = false
 
@@ -51,6 +65,7 @@ final class MicrophoneCaptureEngine {
     /// `nil` uses AVAudioEngine's system default input.
     func start(deviceID: AudioDeviceID? = nil) throws {
         guard !isRunning else { return }
+        engine = AVAudioEngine()
 
         if let deviceID {
             try route(to: deviceID)
