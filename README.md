@@ -16,4 +16,4 @@ A real-time audio analysis tool for live sound environments. Visualize sounds, t
 
 ## License
 
-[MIT](LICENSE)
+[GPLv3](LICENSE)
