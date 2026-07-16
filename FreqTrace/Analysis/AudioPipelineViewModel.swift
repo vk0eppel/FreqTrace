@@ -377,6 +377,17 @@ final class AudioPipelineViewModel {
         connectionState = connectionState.stopping()
     }
 
+    /// Stop/Start as a single toggle (spacebar shortcut, AppShellView) --
+    /// same Stop/Start pair the Controls row button already drives, just
+    /// reachable without a mouse.
+    func toggleCapture() {
+        if isCaptureActive {
+            stop()
+        } else {
+            resumeCapture()
+        }
+    }
+
     /// Resumes capture after Stop (CONTEXT.md "Stop"): re-initializes
     /// capture against the currently-selected Input Device, the same
     /// resolution `startCapture` already performs -- not a fresh device

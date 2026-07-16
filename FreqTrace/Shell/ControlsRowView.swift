@@ -277,11 +277,7 @@ struct ControlsRowView: View {
     private var stopButton: some View {
         let isActive = trackedFrequencyViewModel.isCaptureActive
         return Button {
-            if isActive {
-                trackedFrequencyViewModel.stop()
-            } else {
-                trackedFrequencyViewModel.resumeCapture()
-            }
+            trackedFrequencyViewModel.toggleCapture()
         } label: {
             HStack(spacing: 4) {
                 LEDIndicator(isLit: isActive, color: theme.danger)
