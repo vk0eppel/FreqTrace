@@ -8,12 +8,14 @@
 //  shape as RTABandingResolution (RTA/RTABandingResolution.swift):
 //  CaseIterable/Identifiable over the raw value real techs would
 //  recognize, not an opaque index. Larger windows mean finer frequency
-//  resolution (narrower bins) at the cost of coarser time resolution
-//  (longer hop, laggier updates) -- a tradeoff a tech might want to dial
+//  resolution (narrower bins) at the cost of a longer analysis window
+//  (slower-moving content per spectrum, since each FFT still spans the
+//  full window duration) -- a tradeoff a tech might want to dial
 //  differently per situation (finer resolution hunting a low-frequency
 //  ring vs. faster response for fast-moving material), the same way
 //  RTABandingResolution and Time Averaging are already selectable rather
-//  than fixed.
+//  than fixed. The *update cadence* is deliberately NOT part of the
+//  tradeoff anymore -- see hopSize below.
 //
 
 import Foundation
@@ -39,8 +41,21 @@ nonisolated enum FFTWindowSize: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
     var windowSize: Int { rawValue }
-    /// 50% overlap at every size, matching AnalysisConfig's own convention.
-    var hopSize: Int { rawValue / 2 }
+    /// Capped at 2048 samples (~43ms at 48kHz) rather than always
+    /// windowSize / 2 (bug fix -- user report: RTA stutters, "the higher
+    /// the fft size the bigger the stutter"). With hop hard-coupled to
+    /// window size, the pipeline's whole update rate degraded as the
+    /// window grew (16384 -> one spectrum per ~171ms, ~6/s -- confirmed
+    /// via log instrumentation of how often the RTA's bar targets actually
+    /// changed), and no display-side smoothing can hide a 6Hz data rate:
+    /// easing toward it reads as lag, snapping to it reads as stutter.
+    /// Larger windows now overlap more (16384 = 87.5%) instead of updating
+    /// slower -- the approach real analyzers use -- so every consumer
+    /// (RTA, waterfall, Tracked Frequency, SPL) updates at >= ~23Hz
+    /// regardless of FFT size. The added FFT throughput (a 16384-point
+    /// vDSP FFT every ~43ms instead of ~171ms) is trivial. Sizes at or
+    /// below 4096 keep their natural 50% overlap, already under the cap.
+    var hopSize: Int { min(rawValue / 2, 2048) }
     var label: String { String(rawValue) }
 
     static let `default`: FFTWindowSize = .n8192

@@ -238,9 +238,27 @@ struct FFTWindowSizeTests {
         #expect(abs(frequency - 1000) <= config.binResolutionHz)
     }
 
-    @Test func fiftyPercentOverlapAtEverySize() {
+    // Root cause of the "RTA stutters, worse at high FFT size" report:
+    // hop used to be hard-coupled to window size (always windowSize / 2),
+    // so the whole pipeline's update rate degraded as the window grew --
+    // ~6 spectra/second at 16384, measured via log instrumentation as the
+    // RTA's bar targets only changing every ~170ms. No display smoothing
+    // can hide a 6Hz data rate (smoothing reads as lag, snapping reads as
+    // stutter), so the fix is at the source: hop is capped at 2048 samples
+    // (~43ms at 48kHz), meaning larger windows overlap *more* instead of
+    // updating slower -- the same trick real analyzers use.
+    @Test func hopDurationNeverDegradesWithWindowSize() {
         for size in FFTWindowSize.allCases {
-            #expect(size.hopSize == size.windowSize / 2)
+            let config = size.config(sampleRate: 48_000)
+            let hopDuration = Double(config.hopSize) / config.sampleRate
+            #expect(hopDuration <= 2048.0 / 48_000 + 0.0001)
+        }
+    }
+
+    @Test func overlapIsAtLeastFiftyPercentAtEverySize() {
+        for size in FFTWindowSize.allCases {
+            #expect(size.hopSize <= size.windowSize / 2)
+            #expect(size.hopSize > 0)
         }
     }
 
