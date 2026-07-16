@@ -41,7 +41,29 @@ vertex VertexOut waterfall_vertex(uint vertexID [[vertex_id]]) {
 }
 
 struct WaterfallUniforms {
-    float scrollOffset;
+    /// Continuous, smoothly-eased position (in fractional row units) of the
+    /// newest row (ticket #15, user report: "scroll ... stops sometimes and
+    /// then updates", then "still lagging"/"regularly repeated, 2-3 times a
+    /// second"). Two earlier approaches tried to *predict* when the next
+    /// hop would land (from a fixed theoretical duration, then a measured
+    /// one); real hop delivery turned out to arrive in a repeating
+    /// deterministic pattern (not jitter around a mean), which any
+    /// prediction guesses wrong on every single hop -- freezing when it
+    /// undershoots, snapping forward when it overshoots. WaterfallRenderer.
+    /// displayedRowPosition instead continuously eases toward whichever row
+    /// is *actually* newest, never predicting the future, so every frame
+    /// produces genuine smooth motion at the cost of a small constant
+    /// (not jittery) display lag.
+    float newestRowContinuous;
+    /// Matches WaterfallRenderer.draw's `maxLagRows` -- reserved as extra
+    /// guard margin below so the seam-avoidance window's far edge never
+    /// reaches into rows the circular buffer has already overwritten (bug
+    /// fix, user report: "the line on top ... is back and bigger than
+    /// before" -- displayRowSpan below used to assume newestRowContinuous
+    /// *was* the true newest row; once it started lagging behind by design,
+    /// the window's far edge started reading already-overwritten rows).
+    float maxLagRows;
+    float rowCount;
     float minHz;
     float maxHz;
     float binResolutionHz;
@@ -85,10 +107,7 @@ static float3 waterfallColor(float t, bool isLightMode) {
 fragment float4 waterfall_fragment(VertexOut in [[stage_in]],
                                     texture2d<float, access::sample> spectrumTexture [[texture(0)]],
                                     constant WaterfallUniforms &uniforms [[buffer(0)]]) {
-    // u (frequency axis) clamps at the edges; v (time axis) wraps, since
-    // the texture is a circular buffer of history rows -- one sampler,
-    // different address modes per axis.
-    constexpr sampler s(coord::normalized, s_address::clamp_to_edge, t_address::repeat, filter::linear);
+    constexpr sampler s(coord::normalized, s_address::clamp_to_edge, t_address::clamp_to_edge, filter::linear);
 
     // Log-frequency remap: screen-space in.uv.x (0=20Hz, 1=20kHz) -> the
     // linear FFT bin column that frequency actually lives in. Matches
@@ -97,11 +116,44 @@ fragment float4 waterfall_fragment(VertexOut in [[stage_in]],
     float binIndex = freq / uniforms.binResolutionHz;
     float texU = clamp(binIndex / uniforms.columnCount, 0.0, 1.0);
 
-    // Scrolling: see WaterfallHistoryBuffer.scrollOffset's doc comment for
-    // the derivation -- a fixed texture row's content moves toward
-    // increasing v (upward) as scrollOffset advances over time.
-    float texV = fract((1.0 - in.uv.y) + uniforms.scrollOffset);
+    // Scrolling (ticket #15 rewrite -- bug fix, user report: "a thin
+    // horizontal strip of waterfall color content ... flickers at the very
+    // top edge"). The old scheme sampled the texture's time axis as one
+    // full loop of the circular buffer (`fract((1-uv.y)+scrollOffset)`),
+    // which forces uv.y=0 ("now") and uv.y=1 ("oldest") to resolve to the
+    // exact same interpolation point -- and that point always landed
+    // exactly on a texel boundary, so linear filtering blended the
+    // brand-new row 50/50 with the unrelated row from ~15s ago every single
+    // frame. Fixed by walking backward from the newest row (uniforms.
+    // newestRowContinuous, itself a smoothly-eased float -- see
+    // WaterfallRenderer.displayedRowPosition) by up to displayRowSpan row
+    // units, which never wraps back onto the newest row itself, so there's
+    // no seam to blend across at all.
+    float rowCount = max(uniforms.rowCount, 1.0);
+    float displayRowSpan = max(rowCount - 1.0 - max(uniforms.maxLagRows, 0.0), 1.0);
+    float rowFloat = clamp(
+        uniforms.newestRowContinuous - in.uv.y * displayRowSpan,
+        uniforms.newestRowContinuous - displayRowSpan,
+        uniforms.newestRowContinuous
+    );
+    float rowFloorF = floor(rowFloat);
+    float frac = rowFloat - rowFloorF;
 
-    float magnitude = spectrumTexture.sample(s, float2(texU, texV)).r;
+    int rowCountI = int(rowCount);
+    int rowNear = ((int(rowFloorF) % rowCountI) + rowCountI) % rowCountI;
+    int rowFar = (((int(rowFloorF) - 1) % rowCountI) + rowCountI) % rowCountI;
+
+    // Sampled at each row's exact texel center so the hardware sampler
+    // contributes zero weight from its vertical neighbor -- linear
+    // filtering still applies normally on the U (frequency) axis. Note
+    // rowFar can reference a not-yet-written (or wrapped-onto-newest) row
+    // right at rowFloat's extremes, but frac lands at exactly 0 there, so
+    // it always carries zero weight in the mix below.
+    float2 uvNear = float2(texU, (float(rowNear) + 0.5) / rowCount);
+    float2 uvFar = float2(texU, (float(rowFar) + 0.5) / rowCount);
+    float mNear = spectrumTexture.sample(s, uvNear).r;
+    float mFar = spectrumTexture.sample(s, uvFar).r;
+    float magnitude = mix(mNear, mFar, frac);
+
     return float4(waterfallColor(magnitude, uniforms.isLightMode > 0.5), 1.0);
 }

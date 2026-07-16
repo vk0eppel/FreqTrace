@@ -56,7 +56,12 @@ struct MetalWaterfallView: NSViewRepresentable {
         view.delegate = renderer
         view.colorPixelFormat = .bgra8Unorm
         view.clearColor = MTLClearColorMake(0, 0, 0, 1)
-        view.preferredFramesPerSecond = 30
+        // Bumped from 30 (ticket #15, fluid-scroll fix): fractionalRow
+        // interpolation (WaterfallRenderer.draw) only looks as smooth as it
+        // has draw calls to interpolate across within one hop period -- at
+        // 30fps and an ~85ms hop, that was only ~2-3 samples, still visibly
+        // steppy. 60fps roughly doubles that headroom.
+        view.preferredFramesPerSecond = 60
         view.isPaused = false
         view.enableSetNeedsDisplay = false
         return view

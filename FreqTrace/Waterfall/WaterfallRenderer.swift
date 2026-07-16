@@ -23,7 +23,15 @@ import MetalKit
 import os
 
 private struct WaterfallUniforms {
-    var scrollOffset: Float
+    /// Continuous, smoothly-eased position of the newest row (ticket #15) --
+    /// see WaterfallRenderer.displayedRowPosition's doc comment.
+    var newestRowContinuous: Float
+    /// Matches WaterfallRenderer.draw's `maxLagRows` -- the shader reserves
+    /// this many extra guard rows so the seam-avoidance window's far edge
+    /// never reaches into rows the circular buffer has already overwritten
+    /// (see draw(in:)'s doc comment on displayedRowPosition's clamp).
+    var maxLagRows: Float
+    var rowCount: Float
     var minHz: Float
     var maxHz: Float
     var binResolutionHz: Float
@@ -52,6 +60,30 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
     private let historyLock: OSAllocatedUnfairLock<(store: WaterfallHistoryStore, writeIndex: Int)>
     private let historyRowCount: Int
     private let historyDurationSeconds: Double
+    /// Continuously-eased scroll position, in fractional row units (ticket
+    /// #15, fluid-scroll fix -- second iteration). The first two attempts
+    /// both tried to *predict* when the next hop would land (a fixed
+    /// theoretical hop duration, then a measured/smoothed one) so the shader
+    /// could interpolate toward it. Diagnostic logging showed why both
+    /// still stuttered at the reported ~2-3Hz: real hop delivery isn't
+    /// jittery noise around a mean, it's a repeating deterministic pattern
+    /// (observed: ~200ms, ~190ms, ~100ms, repeat -- a ripple from the
+    /// analysis-actor/MainActor/SwiftUI hop chain). Averaging that pattern
+    /// still guesses wrong on every single hop: right after a short gap the
+    /// estimate undershoots the next (long) one and freezes waiting; right
+    /// after a long gap it overshoots and has to snap forward to catch up.
+    /// No predictive estimate can track a pattern like that without
+    /// mispredicting it half the time.
+    ///
+    /// This replaces prediction with a target-chasing filter: every draw
+    /// call eases `displayedRowPosition` a fraction of the way toward
+    /// whichever row is *actually* newest right now (never a guess about
+    /// the future), at a fixed smoothing time-constant. That's always
+    /// well-defined and always produces smooth per-frame motion -- no
+    /// waiting on a prediction, no catch-up snap -- at the cost of a small,
+    /// constant (not jittery) display lag of roughly one hop duration.
+    private var displayedRowPosition: Double = -1
+    private var lastDrawInstant: Date?
     /// Ticket #10: written from the main actor (MetalWaterfallView.
     /// updateNSView), read from draw(in:) (not guaranteed main thread) --
     /// an OSAllocatedUnfairLock-guarded flag, same cross-thread handoff
@@ -134,8 +166,64 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
         }
 
         let isLightMode = appearanceModeLock.withLock { $0 == .light }
+
+        // Fluid-scroll fix (ticket #15, see displayedRowPosition's doc
+        // comment for why this replaced predicting the next hop's arrival
+        // time): ease toward the actual newest row every draw call, rather
+        // than guessing when it'll change.
+        //
+        // Bug fix (user report: "stutter seems less visible but still
+        // there" after the first version of this easing): that version
+        // used exponential ("spring") easing -- velocity proportional to
+        // (target - position), so it sped up right after every target jump
+        // and slowed down before the next one. Since hops land in a
+        // repeating irregular rhythm (long/long/short -- see the diagnostic
+        // findings above), that speed envelope still repeated at the same
+        // ~2-3Hz, just softened rather than eliminated. Switched to a
+        // constant-rate crawl instead: displayedRowPosition always advances
+        // at the same fixed pace (the long-run average hop rate, which
+        // holds steady even though individual hops don't -- confirmed via
+        // the same diagnostic logging), completely decoupling instantaneous
+        // velocity from exactly when any single hop happens to land. It
+        // only deviates from that constant pace if a real stall (capture
+        // restart, a paused/backgrounded window) pushes it against the
+        // maxLagRows floor below, which is the rare/expected case, not the
+        // steady-state one.
+        let now = Date()
+        let target = Double(max(historyBuffer.writeIndex - 1, 0))
+        if displayedRowPosition < 0 {
+            displayedRowPosition = target
+        }
+        let dt = lastDrawInstant.map { now.timeIntervalSince($0) } ?? 0
+        lastDrawInstant = now
+        let theoreticalHopSeconds = historyRowCount > 0 ? historyDurationSeconds / Double(historyRowCount) : 0.05
+        if theoreticalHopSeconds > 0, dt > 0 {
+            let rowsPerSecond = 1 / theoreticalHopSeconds
+            displayedRowPosition = min(displayedRowPosition + rowsPerSecond * dt, target)
+        } else {
+            displayedRowPosition = target
+        }
+        // Bug fix (user report: "the line on top ... is back and bigger
+        // than before"): easing deliberately keeps displayedRowPosition
+        // *behind* the true newest row -- but Waterfall.metal's seam-safe
+        // window (rowCount-1 wide) was still sized assuming the reference
+        // point it walks backward from *is* the true newest row. Once that
+        // reference point lags, the window's far edge reaches back into
+        // rows the circular buffer has already overwritten with newer
+        // data -- i.e. exactly the seam this was supposed to eliminate,
+        // just relocated and, since the lag can be a few rows' worth
+        // instead of the old scheme's single-texel misalignment, more
+        // visible. `maxLagRows` bounds the lag to a known worst case, and
+        // the shader (displayRowSpan) reserves that many extra guard rows
+        // so the window's far edge can never reach past what's actually
+        // still resident in the buffer.
+        let maxLagRows = 4.0
+        displayedRowPosition = max(min(displayedRowPosition, target), target - maxLagRows)
+
         var uniforms = WaterfallUniforms(
-            scrollOffset: historyBuffer.scrollOffset,
+            newestRowContinuous: Float(displayedRowPosition),
+            maxLagRows: Float(maxLagRows),
+            rowCount: Float(historyRowCount),
             minHz: Float(FrequencyAxis.minHz),
             maxHz: Float(FrequencyAxis.maxHz),
             binResolutionHz: Float(config.binResolutionHz),
