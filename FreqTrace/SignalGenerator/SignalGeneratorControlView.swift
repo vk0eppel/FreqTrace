@@ -113,7 +113,10 @@ struct SignalGeneratorControlView: View {
     /// whole numbers but a few (31.5, 315, 3150...) carry one decimal, so
     /// trailing ".0" is trimmed rather than always showing a fixed number
     /// of decimal places.
-    private static func formattedHz(_ hz: Double) -> String {
+    // nonisolated: passed as NumericValueField's `format` closure, which
+    // isn't main-actor-bound -- pure string formatting anyway (Swift 6
+    // language-mode error otherwise).
+    private nonisolated static func formattedHz(_ hz: Double) -> String {
         let rounded = (hz * 10).rounded() / 10
         if rounded.truncatingRemainder(dividingBy: 1) == 0 {
             return "\(Int(rounded))Hz"

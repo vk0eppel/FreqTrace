@@ -361,16 +361,25 @@ final class AudioPipelineViewModel {
         deviceEnumerator.startObserving()
         refreshAvailableDevices()
 
-        // See MicrophoneCaptureEngine.onConfigurationChange: the engine
-        // stops itself when the device's IO configuration changes under it
-        // (e.g. a sample-rate change in Audio MIDI Setup) -- restart
-        // promptly rather than waiting out the stall watchdog.
-        let captureEngine = captureEngine
-        Task { [weak self] in
-            await captureEngine.setConfigurationChangeHandler {
-                Task { @MainActor [weak self] in
-                    self?.handleEngineConfigurationChange()
-                }
+    }
+
+    /// See MicrophoneCaptureEngine.onConfigurationChange: the engine stops
+    /// itself when the device's IO configuration changes under it (e.g. a
+    /// sample-rate change in Audio MIDI Setup) -- restart promptly rather
+    /// than waiting out the stall watchdog. Installed lazily from the
+    /// first performStartCapture rather than init (Swift 6 warning fix:
+    /// escaping a @Sendable closure that captures `self` from inside init
+    /// is flagged as a concurrency error-to-be, since `self` isn't fully
+    /// initialized until init returns) -- the handler is only meaningful
+    /// once capture has started anyway.
+    private var configurationChangeHandlerInstalled = false
+
+    private func installConfigurationChangeHandlerIfNeeded() async {
+        guard !configurationChangeHandlerInstalled else { return }
+        configurationChangeHandlerInstalled = true
+        await captureEngine.setConfigurationChangeHandler {
+            Task { @MainActor [weak self] in
+                self?.handleEngineConfigurationChange()
             }
         }
     }
@@ -506,6 +515,7 @@ final class AudioPipelineViewModel {
     /// every await abort cleanly if a Stop landed mid-flight.
     private func performStartCapture(deviceID: String, persistChoice: Bool, generation: Int) async {
         haltPublishing()
+        await installConfigurationChangeHandlerIfNeeded()
         await captureEngine.stop()
         guard stopGeneration == generation else { return }
 

@@ -9,7 +9,11 @@
 
 import Foundation
 
-enum MagnitudeScaling {
+// Pure math, nonisolated (like Weighting/AnalysisConfig): called from the
+// AudioAnalysisPipeline actor (via AnomalyDetector), from WaterfallRenderer's
+// draw thread, and from the main actor -- a module-default @MainActor
+// isolation here was a Swift 6 language-mode error in waiting.
+nonisolated enum MagnitudeScaling {
     // -120dB (user request, was -80dB) -- matches decibels(power:)'s own
     // 1e-12 floor (10*log10(1e-12) = -120dB exactly), so true silence
     // clamps at the same point normalized(power:) does, rather than the

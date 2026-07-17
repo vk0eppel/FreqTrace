@@ -151,31 +151,22 @@ actor AudioAnalysisPipeline {
             // spectrum(in:), and weightedLevelDb(...) separately (each
             // would redo the same FFT).
             if let magnitudes = tracker.spectrum(in: rollingWindow) {
-                // Copy-out/mutate/copy-back, not a direct mutating call on
-                // the stored property (found by code review, and
-                // confirmed by trying the direct call): Swift's actor
-                // isolation checker rejects `timeAveragingBlender.blend(...)`
-                // / `anomalyDetector.process(...)` called directly here
-                // ("cannot be passed 'inout' to implicitly 'async' function
-                // call") -- a real compiler limitation in this context, not
-                // a mistake to simplify away. A generic keyPath-based
-                // helper was tried too (to de-duplicate the two identical
-                // call sites) but keyPaths can't be formed to
-                // actor-isolated stored properties either, so this stays
-                // duplicated rather than fighting the type system further.
-                var blender = timeAveragingBlender
-                let blendedForTracking = blender.blend(magnitudes, preset: timeAveraging)
-                timeAveragingBlender = blender
+                // Direct mutating calls on the stored properties: possible
+                // ever since TimeAveragingBlender/AnomalyDetector became
+                // `nonisolated` (Swift 6 warning cleanup). While they were
+                // implicitly @MainActor, calling them from this actor was
+                // rejected ("cannot be passed 'inout' to implicitly 'async'
+                // function call") and a copy-out/mutate/copy-back dance was
+                // needed here -- the isolation fix dissolved it.
+                let blendedForTracking = timeAveragingBlender.blend(magnitudes, preset: timeAveraging)
                 if let frequency = tracker.trackedFrequency(fromMagnitudes: blendedForTracking, weighting: weighting) {
                     let splDb = tracker.weightedLevelDb(fromMagnitudes: magnitudes, weighting: weighting)
                     let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting) ?? -Double.infinity
-                    var detector = anomalyDetector
                     // Raw, unblended, unweighted magnitudes -- ADR 0001
                     // requires the true measured spectrum so a genuine
                     // low-frequency resonance isn't hidden by A-weighting's
                     // roll-off or smoothed away by Slow averaging.
-                    let anomalyCandidates = detector.process(magnitudes: magnitudes, config: config)
-                    anomalyDetector = detector
+                    let anomalyCandidates = anomalyDetector.process(magnitudes: magnitudes, config: config)
                     // What the waterfall/RTA actually display: Weighting
                     // and Time Averaging both applied, unlike magnitudes
                     // above (found by user report: these controls

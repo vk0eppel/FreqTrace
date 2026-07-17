@@ -265,8 +265,11 @@ final class WaterfallRenderer: NSObject, MTKViewDelegate {
         }
 
         let writeIndex = historyBuffer.writeIndex
+        // let-binding, not the `var` above: capturing a mutable local in
+        // withLock's @Sendable closure is a Swift 6 language-mode error.
+        let values = normalized
         historyLock.withLock { state in
-            state.store.write(row: row, values: normalized)
+            state.store.write(row: row, values: values)
             state.writeIndex = writeIndex
         }
     }

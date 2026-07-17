@@ -10,7 +10,12 @@
 //  (AC: "does not change FFT frequency resolution/window size").
 //
 
-enum TimeAveragingPreset: String, CaseIterable, Identifiable {
+// Plain value types -- opt out of this module's default @MainActor
+// isolation (like Weighting/AnalysisConfig) so AudioAnalysisPipeline's
+// background actor can call blend(_:preset:) directly; leaving them
+// implicitly MainActor-isolated was a Swift 6 language-mode error waiting
+// to happen (warned in Swift 5 mode).
+nonisolated enum TimeAveragingPreset: String, CaseIterable, Identifiable {
     case fast = "Fast"
     case slow = "Slow"
 
@@ -31,7 +36,7 @@ enum TimeAveragingPreset: String, CaseIterable, Identifiable {
     }
 }
 
-struct TimeAveragingBlender {
+nonisolated struct TimeAveragingBlender {
     private var previous: [Float]?
 
     /// Blends `magnitudes` against the previously blended frame. The very

@@ -16,7 +16,11 @@
 
 import Foundation
 
-struct WaterfallHistoryStore {
+// nonisolated: read/written from WaterfallRenderer's Metal draw thread
+// (under WaterfallRenderer's own locks), not the main actor -- the module's
+// default @MainActor isolation here was a Swift 6 language-mode error in
+// waiting.
+nonisolated struct WaterfallHistoryStore {
     private var rows: [[Float]]
     let columnCount: Int
 

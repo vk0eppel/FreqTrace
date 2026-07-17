@@ -17,7 +17,11 @@
 
 import Foundation
 
-struct WaterfallHistoryBuffer {
+// nonisolated: read/written from WaterfallRenderer's Metal draw thread
+// (under WaterfallRenderer's own locks), not the main actor -- the module's
+// default @MainActor isolation here was a Swift 6 language-mode error in
+// waiting.
+nonisolated struct WaterfallHistoryBuffer {
     let rowCount: Int
     let columnCount: Int
     let historyDurationSeconds: Double

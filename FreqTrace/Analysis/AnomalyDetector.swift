@@ -28,7 +28,11 @@ struct SpectralPeak: Equatable, Sendable {
     let magnitudeDb: Float
 }
 
-enum PeakFinder {
+// This file's types are all nonisolated for the same reason as
+// TimeAveraging.swift's: plain value types the AudioAnalysisPipeline
+// background actor must call directly, opting out of the module's default
+// @MainActor isolation (Swift 6 language-mode error otherwise).
+nonisolated enum PeakFinder {
     /// How far above its shoulders (see below) a bin's level must be to
     /// count as narrowband, rather than a broad bump in the spectrum. Not
     /// spec'd -- 6dB comfortably separates a real tone from ordinary
@@ -62,7 +66,7 @@ enum PeakFinder {
     }
 }
 
-enum HarmonicRelation {
+nonisolated enum HarmonicRelation {
     /// How close a peak's frequency must land to an exact integer multiple
     /// of another peak to count as part of its harmonic series. Not
     /// spec'd -- loose enough to tolerate FFT bin quantization at low
@@ -95,7 +99,7 @@ enum HarmonicRelation {
 /// and sustained for long enough. `id` is the frequency itself (rounded to
 /// the nearest Hz), stable enough across a track's lifetime for SwiftUI
 /// list diffing.
-struct AnomalyCandidate: Identifiable, Equatable, Sendable {
+nonisolated struct AnomalyCandidate: Identifiable, Equatable, Sendable {
     let frequencyHz: Double
     let severityDb: Float
 
@@ -105,7 +109,7 @@ struct AnomalyCandidate: Identifiable, Equatable, Sendable {
 /// Stateful rolling-window sustain tracker (ADR 0001's "sustained ...
 /// over a rolling frame window"). Value type -- callers (AudioAnalysisPipeline)
 /// own the mutable instance across hops.
-struct AnomalyDetector: Sendable {
+nonisolated struct AnomalyDetector: Sendable {
     /// ~350ms sustain window (ADR 0001), long enough to reject a single
     /// transient hit while still catching a feedback ring building
     /// quickly. Expressed as a duration and converted to frames via the
