@@ -80,8 +80,12 @@ struct TypographyTests {
 
 struct LayoutMetricsTests {
 
+    // 1280 is a measured value, not the wireframe-era 1120 estimate -- see
+    // LayoutMetrics' header comment for the measurement method (screenshots
+    // at candidate widths with capture running). If this test fails because
+    // LayoutMetrics changed, re-measure; don't just update the number here.
     @Test func minimumWindowSizeMatchesDerivedEstimate() {
-        #expect(LayoutMetrics.minWindowWidth == 1120)
-        #expect(LayoutMetrics.minWindowHeight == 570)
+        #expect(LayoutMetrics.minWindowWidth == 1280)
+        #expect(LayoutMetrics.minWindowHeight == 660)
     }
 }
