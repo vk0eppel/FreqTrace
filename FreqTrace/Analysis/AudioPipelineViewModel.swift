@@ -76,6 +76,13 @@ final class AudioPipelineViewModel {
     /// The Input Device picker's current selection -- see
     /// DeviceConnectionState for whether it's actually running.
     private(set) var selectedInputDeviceID: String?
+    /// The selected device's hardware operating format (user request:
+    /// "indicate sample rate and bit depth near the input device"), shown
+    /// as a dimmed sub-caption in the Input Device plate. Refreshed
+    /// whenever the selection lands (performStartCapture) and whenever the
+    /// device list changes; a mid-capture rate change also refreshes it,
+    /// since recovery goes back through performStartCapture.
+    private(set) var selectedInputDeviceFormat: AudioDeviceFormat?
     /// Drives the disconnected indicator (ticket #4, ADR 0006): the active
     /// device disappearing transitions this to `.disconnected` rather than
     /// silently reassigning to a different device.
@@ -514,6 +521,7 @@ final class AudioPipelineViewModel {
             UserDefaults.standard.set(deviceID, forKey: Self.persistedDeviceIDDefaultsKey)
         }
         selectedInputDeviceID = deviceID
+        selectedInputDeviceFormat = deviceEnumerator.format(forUID: deviceID)
         connectionState = connectionState.selecting(deviceID: deviceID)
 
         // Sample-rate adaptation (closed the former CLAUDE.md "Known gap"):
@@ -621,6 +629,7 @@ final class AudioPipelineViewModel {
     /// picking a device via selectInputDevice).
     private func refreshAvailableDevices() {
         availableInputDevices = deviceEnumerator.availableDevices()
+        selectedInputDeviceFormat = selectedInputDeviceID.flatMap { deviceEnumerator.format(forUID: $0) }
         let availableIDs = Set(availableInputDevices.map(\.id))
         let nextState = connectionState.handlingDeviceListChange(availableDeviceIDs: availableIDs)
 

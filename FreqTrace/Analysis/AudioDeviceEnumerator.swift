@@ -131,6 +131,54 @@ final class AudioDeviceEnumerator {
         }
     }
 
+    /// The device's current hardware operating format (user request:
+    /// "indicate sample rate and bit depth near the input device"): its
+    /// nominal sample rate, plus the bit depth of its first stream's
+    /// *physical* format in this enumerator's scope (the wire format the
+    /// hardware actually runs, e.g. 24-bit integer -- not the HAL's
+    /// Float32 client-side representation, which would always read
+    /// "32-bit" regardless of the converter or interface underneath).
+    func format(forUID uid: String) -> AudioDeviceFormat? {
+        guard let deviceID = deviceID(forUID: uid) else { return nil }
+
+        var rateAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyNominalSampleRate,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var sampleRate = 0.0
+        var rateSize = UInt32(MemoryLayout<Double>.size)
+        guard AudioObjectGetPropertyData(deviceID, &rateAddress, 0, nil, &rateSize, &sampleRate) == noErr,
+              sampleRate > 0 else { return nil }
+
+        return AudioDeviceFormat(sampleRate: sampleRate, bitDepth: physicalBitDepth(deviceID: deviceID))
+    }
+
+    private func physicalBitDepth(deviceID: AudioDeviceID) -> Int? {
+        var streamsAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyStreams,
+            mScope: scope.streamPropertyScope,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var streamsSize: UInt32 = 0
+        guard AudioObjectGetPropertyDataSize(deviceID, &streamsAddress, 0, nil, &streamsSize) == noErr,
+              streamsSize >= UInt32(MemoryLayout<AudioStreamID>.size) else { return nil }
+        var streamIDs = [AudioStreamID](repeating: 0, count: Int(streamsSize) / MemoryLayout<AudioStreamID>.size)
+        guard AudioObjectGetPropertyData(deviceID, &streamsAddress, 0, nil, &streamsSize, &streamIDs) == noErr,
+              let firstStream = streamIDs.first else { return nil }
+
+        var formatAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioStreamPropertyPhysicalFormat,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var format = AudioStreamBasicDescription()
+        var formatSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+        guard AudioObjectGetPropertyData(firstStream, &formatAddress, 0, nil, &formatSize, &format) == noErr,
+              format.mBitsPerChannel > 0 else { return nil }
+        return Int(format.mBitsPerChannel)
+    }
+
     private func allDeviceIDs() -> [AudioDeviceID] {
         var address = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDevices,

@@ -127,6 +127,17 @@ struct ControlsRowView: View {
             }
             .fixedSize()
 
+            // The device's hardware operating format (user request:
+            // "indicate sample rate and bit depth near the input device")
+            // -- dimmed data sub-caption, hidden while disconnected (the
+            // format of a device that's gone is stale information, and the
+            // DISCONNECTED indicator needs the room).
+            if !isDisconnected, let format = trackedFrequencyViewModel.selectedInputDeviceFormat {
+                Text(format.displayString)
+                    .font(.system(size: Typography.subCaptionSize).monospacedDigit())
+                    .foregroundStyle(theme.textFaint)
+            }
+
             if isDisconnected {
                 Text("DISCONNECTED")
                     .font(.system(size: Typography.controlSize, weight: .semibold))

@@ -9,9 +9,34 @@
 //  session) -- the UID is what gets persisted as the "last explicit choice."
 //
 
+import Foundation
+
 struct AudioDevice: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
+}
+
+/// A device's current hardware operating format (user request: "indicate
+/// sample rate and bit depth near the input device") -- the nominal sample
+/// rate plus the physical stream's bit depth. Bit depth is optional: some
+/// devices (aggregates, certain virtual drivers) don't expose a physical
+/// format. Pure data + formatting; the Core Audio queries live in
+/// AudioDeviceEnumerator.format(forUID:).
+struct AudioDeviceFormat: Equatable, Sendable {
+    let sampleRate: Double
+    let bitDepth: Int?
+
+    /// "44.1kHz · 24-bit" -- whole kHz shown without a decimal ("48kHz"),
+    /// fractional rates with one ("44.1kHz"); the bit-depth segment is
+    /// omitted entirely when unknown rather than showing a placeholder.
+    var displayString: String {
+        let kHz = sampleRate / 1000
+        let rate = kHz == kHz.rounded()
+            ? String(format: "%.0fkHz", kHz)
+            : String(format: "%.1fkHz", kHz)
+        guard let bitDepth else { return rate }
+        return "\(rate) \u{00B7} \(bitDepth)-bit"
+    }
 }
 
 /// Pure decision logic for which device should be active: given the
