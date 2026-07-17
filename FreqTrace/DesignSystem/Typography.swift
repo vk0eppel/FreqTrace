@@ -9,7 +9,8 @@
 
 import CoreGraphics
 
-enum Typography {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated enum Typography {
     static let heroSize: CGFloat = 64        // Tracked Frequency
     static let secondarySize: CGFloat = 32   // SPL
     static let tertiarySize: CGFloat = 20    // Anomaly Candidate rows

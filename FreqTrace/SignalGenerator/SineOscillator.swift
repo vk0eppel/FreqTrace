@@ -10,7 +10,10 @@
 
 import Foundation
 
-struct SineOscillator {
+// Pure value type, nonisolated: opts out of the module's default
+// @MainActor isolation (Swift 6) -- runs on the audio render thread and
+// in nonisolated unit tests.
+nonisolated struct SineOscillator {
     var frequency: Double
     var sampleRate: Double
     private var phase: Double

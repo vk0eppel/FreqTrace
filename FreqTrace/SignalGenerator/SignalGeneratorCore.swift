@@ -13,7 +13,10 @@
 
 import Foundation
 
-struct SignalGeneratorCore<RNG: RandomNumberGenerator> {
+// Pure value type, nonisolated: opts out of the module's default
+// @MainActor isolation (Swift 6) -- runs on the audio render thread and
+// in nonisolated unit tests.
+nonisolated struct SignalGeneratorCore<RNG: RandomNumberGenerator> {
     /// Default sine frequency before the tech picks an ISO Band or types a
     /// custom Hz value (ticket #14, CONTEXT.md "ISO Band"). 1000Hz is also
     /// itself a standard ISO Band center.
@@ -26,14 +29,14 @@ struct SignalGeneratorCore<RNG: RandomNumberGenerator> {
     init(sampleRate: Double, rng: RNG, sineFrequency: Double = SignalGeneratorCore.defaultSineFrequency) {
         sine = SineOscillator(frequency: sineFrequency, sampleRate: sampleRate)
 
-        var whiteRNG = rng
         var pinkRNG = rng
         // Advance pinkRNG's state before use so it doesn't produce a stream
-        // identical to whiteRNG's (both start from the same copied seed).
+        // identical to the white generator's (both start from the same
+        // copied seed).
         for _ in 0..<7 {
             _ = pinkRNG.next()
         }
-        white = WhiteNoiseGenerator(rng: whiteRNG)
+        white = WhiteNoiseGenerator(rng: rng)
         pink = PinkNoiseGenerator(rng: pinkRNG)
     }
 

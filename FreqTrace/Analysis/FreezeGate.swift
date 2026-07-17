@@ -11,7 +11,7 @@
 //  AudioPipelineViewModel for how a single FreezeGate<AnalysisResult> gates
 //  all three published properties that update together from one hop.
 //
-struct FreezeGate<Value> {
+nonisolated struct FreezeGate<Value> {
     private(set) var isFrozen = false
     private var heldValue: Value?
 

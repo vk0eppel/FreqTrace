@@ -9,7 +9,8 @@
 
 import Foundation
 
-enum HexColor {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated enum HexColor {
     /// Parses a "#rrggbb" or "rrggbb" string into normalized [0,1] RGB
     /// components. A malformed token is a build-time bug, not a runtime
     /// condition to degrade gracefully from -- fails loudly.

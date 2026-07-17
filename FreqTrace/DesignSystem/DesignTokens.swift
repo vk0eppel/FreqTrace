@@ -11,7 +11,8 @@
 
 import Foundation
 
-enum AppearanceMode: String, CaseIterable, Identifiable {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated enum AppearanceMode: String, CaseIterable, Identifiable {
     case dark = "Dark"
     case light = "Light"
 
@@ -20,7 +21,8 @@ enum AppearanceMode: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
-struct ColorTokens {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated struct ColorTokens {
     let bg: String
     let surface: String
     let surfaceRaised: String
@@ -35,7 +37,8 @@ struct ColorTokens {
     let warn: String
 }
 
-enum DesignTokens {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated enum DesignTokens {
     static let dark = ColorTokens(
         bg: "#0b0d10",
         surface: "#14171b",

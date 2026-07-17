@@ -18,7 +18,9 @@
 //  though the state machine itself is unchanged and fully covered by the
 //  existing tests (see InputDeviceTests.swift).
 //
-enum DeviceConnectionState: Equatable, Sendable {
+// Pure value type, nonisolated: opts out of the module's default
+// @MainActor isolation (Swift 6) -- exercised by nonisolated unit tests.
+nonisolated enum DeviceConnectionState: Equatable, Sendable {
     case stopped
     case running(deviceID: String)
     case disconnected(deviceID: String)

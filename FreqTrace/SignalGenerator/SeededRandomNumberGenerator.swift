@@ -10,7 +10,10 @@
 
 import Foundation
 
-struct SeededRandomNumberGenerator: RandomNumberGenerator {
+// Pure value type, nonisolated: opts out of the module's default
+// @MainActor isolation (Swift 6) -- runs on the audio render thread and
+// in nonisolated unit tests.
+nonisolated struct SeededRandomNumberGenerator: RandomNumberGenerator {
     private var state: UInt64
 
     init(seed: UInt64) {

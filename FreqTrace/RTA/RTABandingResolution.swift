@@ -23,7 +23,8 @@
 
 import Foundation
 
-enum RTABandingResolution: Int, CaseIterable, Identifiable {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated enum RTABandingResolution: Int, CaseIterable, Identifiable {
     case oneOverOne = 1
     case oneOverThree = 3
     case oneOverSix = 6

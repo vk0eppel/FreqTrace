@@ -11,7 +11,9 @@
 
 import Foundation
 
-struct AudioDevice: Identifiable, Equatable, Sendable {
+// Pure value types, nonisolated: opt out of the module's default
+// @MainActor isolation (Swift 6) -- exercised by nonisolated unit tests.
+nonisolated struct AudioDevice: Identifiable, Equatable, Sendable {
     let id: String
     let name: String
 }
@@ -22,7 +24,7 @@ struct AudioDevice: Identifiable, Equatable, Sendable {
 /// devices (aggregates, certain virtual drivers) don't expose a physical
 /// format. Pure data + formatting; the Core Audio queries live in
 /// AudioDeviceEnumerator.format(forUID:).
-struct AudioDeviceFormat: Equatable, Sendable {
+nonisolated struct AudioDeviceFormat: Equatable, Sendable {
     let sampleRate: Double
     let bitDepth: Int?
 
@@ -46,7 +48,7 @@ struct AudioDeviceFormat: Equatable, Sendable {
 /// Originally named InputDeviceSelector (ticket #4); generalized here
 /// (ticket #14) since the logic was never input-specific, only its name --
 /// it's now shared by both the Input Device and Output Device pickers.
-enum AudioDeviceSelector {
+nonisolated enum AudioDeviceSelector {
     static func resolve(
         availableDevices: [AudioDevice],
         persistedDeviceID: String?,

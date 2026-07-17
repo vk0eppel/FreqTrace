@@ -8,7 +8,10 @@
 
 import Foundation
 
-enum Waveform: String, CaseIterable, Identifiable {
+// Pure value type, nonisolated: opts out of the module's default
+// @MainActor isolation (Swift 6) -- runs on the audio render thread and
+// in nonisolated unit tests.
+nonisolated enum Waveform: String, CaseIterable, Identifiable {
     case sine
     case pinkNoise
     case whiteNoise

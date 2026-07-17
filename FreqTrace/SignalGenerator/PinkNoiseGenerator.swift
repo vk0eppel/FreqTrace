@@ -16,7 +16,10 @@
 
 import Foundation
 
-struct PinkNoiseGenerator<RNG: RandomNumberGenerator> {
+// Pure value type, nonisolated: opts out of the module's default
+// @MainActor isolation (Swift 6) -- runs on the audio render thread and
+// in nonisolated unit tests.
+nonisolated struct PinkNoiseGenerator<RNG: RandomNumberGenerator> {
     private var rng: RNG
     private var rows: [Double]
     private var runningSum: Double = 0

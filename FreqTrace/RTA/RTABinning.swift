@@ -13,7 +13,10 @@
 import Foundation
 import os
 
-enum RTABinning {
+// Pure math, nonisolated: opts out of the module's default @MainActor
+// isolation (Swift 6) -- called from nonisolated unit tests and from
+// non-main render/binning paths alike.
+nonisolated enum RTABinning {
     static let defaultBarsPerOctave = 12
 
     /// Memoizes bandEdges(barsPerOctave:) (perf fix -- user request "reduce

@@ -22,7 +22,7 @@ import Foundation
 
 /// One narrowband bump in a magnitude spectrum -- not yet judged
 /// harmonically-related or sustained, just "louder than its surroundings."
-struct SpectralPeak: Equatable, Sendable {
+nonisolated struct SpectralPeak: Equatable, Sendable {
     let bin: Int
     let frequencyHz: Double
     let magnitudeDb: Float

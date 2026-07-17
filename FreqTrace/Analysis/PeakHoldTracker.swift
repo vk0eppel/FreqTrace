@@ -8,7 +8,10 @@
 //  so RTA bars (keyed by bar index), SPL, and the Tracked Frequency level
 //  readout can share one implementation rather than three.
 //
-struct PeakHoldTracker<Key: Hashable> {
+// Plain value type, nonisolated (like TimeAveragingBlender/AnomalyDetector):
+// opts out of the module's default @MainActor isolation so its nonisolated
+// unit tests compile in Swift 6 language mode.
+nonisolated struct PeakHoldTracker<Key: Hashable> {
     private var peaks: [Key: Float] = [:]
 
     /// The held peak for `key`, or `nil` if it's never been updated (or was

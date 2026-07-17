@@ -10,7 +10,8 @@
 
 import Foundation
 
-struct AnalysisResult: Sendable {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated struct AnalysisResult: Sendable {
     let trackedFrequencyHz: Double
     /// Power magnitude per FFT bin (length config.windowSize / 2) -- the
     /// waterfall's per-frame row and the RTA's source spectrum (see

@@ -16,7 +16,8 @@
 
 import Foundation
 
-enum WaterfallColorMap {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated enum WaterfallColorMap {
     struct Stop {
         let position: Float
         let rgb: SIMD3<Float>

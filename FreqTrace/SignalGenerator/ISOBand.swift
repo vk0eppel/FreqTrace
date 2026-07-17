@@ -10,7 +10,9 @@
 
 import Foundation
 
-enum ISOBand {
+// Pure value type, nonisolated: opts out of the module's default
+// @MainActor isolation (Swift 6) -- exercised by nonisolated unit tests.
+nonisolated enum ISOBand {
     /// The standard ISO 266 R10 1/3-octave center frequencies from 25 Hz to
     /// 20 kHz (CONTEXT.md "ISO Band": "25, 31.5, 40, 50 Hz... matching
     /// graphic EQ fader spacing").

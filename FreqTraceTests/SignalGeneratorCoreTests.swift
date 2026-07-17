@@ -92,7 +92,7 @@ struct SineOscillatorTests {
 struct WhiteNoiseGeneratorTests {
 
     @Test func staysWithinUnityAmplitudeBounds() {
-        var rng = SeededRandomNumberGenerator(seed: 1)
+        let rng = SeededRandomNumberGenerator(seed: 1)
         var generator = WhiteNoiseGenerator(rng: rng)
         for _ in 0..<10_000 {
             let sample = generator.nextSample()

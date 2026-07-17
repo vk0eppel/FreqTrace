@@ -10,7 +10,10 @@
 
 import Foundation
 
-enum Decibels {
+// Pure value type, nonisolated: opts out of the module's default
+// @MainActor isolation (Swift 6) -- runs on the audio render thread and
+// in nonisolated unit tests.
+nonisolated enum Decibels {
     /// Converts a dBFS value to a linear amplitude multiplier (0 dB -> 1.0).
     static func linearAmplitude(fromDecibels db: Double) -> Double {
         pow(10, db / 20)

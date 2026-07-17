@@ -18,7 +18,8 @@
 
 import CoreGraphics
 
-enum LayoutMetrics {
+// nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+nonisolated enum LayoutMetrics {
     static let minWindowWidth: CGFloat = 1280
     static let minWindowHeight: CGFloat = 660
 }

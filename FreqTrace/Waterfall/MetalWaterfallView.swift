@@ -29,7 +29,12 @@ import SwiftUI
 /// Un-pausing needs no catch-up logic -- WaterfallRenderer.draw always
 /// renders current state, and the scroll position is wall-clock-derived.
 final class OcclusionPausingMTKView: MTKView {
-    private var occlusionObserver: (any NSObjectProtocol)?
+    /// nonisolated(unsafe): deinit is nonisolated in Swift 6 and may not
+    /// touch main-actor state, but this token is only ever written on the
+    /// main actor (viewDidMoveToWindow) and read once more in deinit,
+    /// after which nothing can race it -- removing an observer token from
+    /// any thread is documented-safe for NotificationCenter.
+    private nonisolated(unsafe) var occlusionObserver: (any NSObjectProtocol)?
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
@@ -43,11 +48,16 @@ final class OcclusionPausingMTKView: MTKView {
             forName: NSWindow.didChangeOcclusionStateNotification,
             object: window,
             queue: .main
-        ) { [weak self] notification in
+        ) { [weak self] _ in
             // Delivered on the main queue (specified above), so hopping to
             // the main actor is a formality the compiler can't see through.
+            // The notification itself is deliberately not touched: passing
+            // a non-Sendable Notification into the isolated closure is a
+            // Swift 6 error, and `self.window` is the same window anyway
+            // (the observer is registered filtered to it, and re-registered
+            // whenever the view changes windows).
             MainActor.assumeIsolated {
-                guard let self, let window = notification.object as? NSWindow else { return }
+                guard let self, let window = self.window else { return }
                 self.updatePauseState(for: window)
             }
         }

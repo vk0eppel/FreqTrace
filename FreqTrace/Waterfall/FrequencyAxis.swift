@@ -14,7 +14,10 @@
 
 import Foundation
 
-enum FrequencyAxis {
+// Pure math, nonisolated: opts out of the module's default @MainActor
+// isolation (Swift 6) -- called from nonisolated unit tests and from
+// non-main render/binning paths alike.
+nonisolated enum FrequencyAxis {
     static let minHz: Double = 20
     static let maxHz: Double = 20_000
 
