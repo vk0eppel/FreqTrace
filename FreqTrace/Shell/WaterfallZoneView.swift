@@ -38,6 +38,12 @@ struct WaterfallZoneView: View {
     /// Cursor position within the zone's own coordinate space, nil when the
     /// mouse isn't over it -- drives the hover tooltip below.
     @State private var hoverPoint: CGPoint?
+    /// Keyboard shortcuts (user request: "w for Waterfall view, r for
+    /// RTA") -- registered here rather than in AppShellView's monitor
+    /// because displayMode is this view's own state; KeyboardShortcuts
+    /// provides the shared guards (modifiers pass through, a focused text
+    /// field wins), same as the spacebar Start/Stop shortcut.
+    @State private var shortcutMonitor: Any?
 
     private var historyDurationSeconds: Double {
         WaterfallHistoryBuffer(config: pipeline.config).historyDurationSeconds
@@ -72,6 +78,17 @@ struct WaterfallZoneView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
+        .onAppear {
+            guard shortcutMonitor == nil else { return }
+            shortcutMonitor = KeyboardShortcuts.install([
+                "w": { displayMode = .waterfall },
+                "r": { displayMode = .rta },
+            ])
+        }
+        .onDisappear {
+            KeyboardShortcuts.remove(shortcutMonitor)
+            shortcutMonitor = nil
+        }
         .task(id: pipeline.config) {
             // Reactive, not just-once-in-onAppear (FFT size became
             // selectable, user request): WaterfallRenderer's GPU texture

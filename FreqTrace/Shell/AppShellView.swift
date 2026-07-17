@@ -18,23 +18,17 @@ import SwiftUI
 struct AppShellView: View {
     @State private var trackedFrequencyViewModel = AudioPipelineViewModel()
     @State private var appearanceSettings = AppearanceSettings()
-    /// Bug fix (user report: spacebar still typed into/erased the SPL
-    /// Offset field): a hidden Button carrying .keyboardShortcut(.space)
+    /// Bug fix history (user report: spacebar still typed into/erased the
+    /// SPL Offset field): a hidden Button carrying .keyboardShortcut(.space)
     /// was tried first, with the button explicitly focused on appear to
     /// win the window's initial first-responder assignment away from
     /// NumericValueField -- didn't hold, since AppKit's own default-focus
     /// assignment on window-did-become-key can run after SwiftUI's
     /// onAppear and simply overwrite it back to the text field, a timing
-    /// race rather than something this view controls.
-    ///
-    /// Replaced with a local NSEvent monitor that checks the *actual*
-    /// first responder at the moment spacebar is pressed, not any
-    /// SwiftUI-side focus state: if it's currently an NSTextView (a
-    /// NumericValueField mid-edit uses the shared field editor, which is
-    /// one), the keystroke is let through untouched so typing a literal
-    /// space still works; otherwise it's consumed here and toggles
-    /// capture. This can't lose a focus race because it isn't one -- it
-    /// asks AppKit what's actually focused right when the key is pressed.
+    /// race rather than something this view controls. Replaced with an
+    /// NSEvent monitor that checks the *actual* first responder at the
+    /// moment the key is pressed -- that logic now lives in
+    /// KeyboardShortcuts (shared with WaterfallZoneView's w/r shortcuts).
     @State private var spacebarMonitor: Any?
     /// Bug fix (user report: "if the user needs to enter a value somewhere,
     /// the focus get stuck there"): once a NumericValueField becomes first
@@ -99,22 +93,13 @@ struct AppShellView: View {
 
     private func installSpacebarShortcut() {
         guard spacebarMonitor == nil else { return }
-        spacebarMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.keyCode == 49, event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty else {
-                return event
-            }
-            if let responder = NSApp.keyWindow?.firstResponder, responder is NSTextView {
-                return event
-            }
-            trackedFrequencyViewModel.toggleCapture()
-            return nil
-        }
+        spacebarMonitor = KeyboardShortcuts.install([
+            " ": { trackedFrequencyViewModel.toggleCapture() },
+        ])
     }
 
     private func removeSpacebarShortcut() {
-        if let spacebarMonitor {
-            NSEvent.removeMonitor(spacebarMonitor)
-        }
+        KeyboardShortcuts.remove(spacebarMonitor)
         spacebarMonitor = nil
     }
 
