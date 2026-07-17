@@ -99,6 +99,15 @@ final class AudioPipelineViewModel {
     /// Only meaningful while `isCaptureActive`; the UI gates on both.
     private(set) var isCaptureStalled = false
 
+    /// Drives the "MIC ACCESS DENIED" indicator (user request, follow-up
+    /// to the ADR 0007 permission fix): set when a Start attempt finds
+    /// microphone permission denied, cleared the moment a later attempt
+    /// finds it granted (the tech granting access in System Settings and
+    /// pressing Start again is the recovery path) -- so the indicator is
+    /// both an explanation of why Start "did nothing" and an implicit
+    /// pointer at the fix.
+    private(set) var isMicAccessDenied = false
+
     var isCaptureActive: Bool {
         if case .running = connectionState { return true }
         return false
@@ -529,9 +538,11 @@ final class AudioPipelineViewModel {
         // denial lands in the same .stopped state as any other failed
         // start. Not unit-testable (TCC-bound, needs a real prompt).
         guard await AVAudioApplication.requestRecordPermission() else {
+            isMicAccessDenied = true
             if stopGeneration == generation { connectionState = .stopped }
             return
         }
+        isMicAccessDenied = false
         guard stopGeneration == generation else { return }
 
         await installConfigurationChangeHandlerIfNeeded()
@@ -605,6 +616,7 @@ final class AudioPipelineViewModel {
         }
 
         lastHopAt = Date()
+        consecutiveSilentHops = 0
         watchdogTask?.cancel()
         watchdogTask = Task { [weak self] in
             while !Task.isCancelled {
@@ -632,10 +644,44 @@ final class AudioPipelineViewModel {
     /// when not frozen, held silently when frozen (CONTEXT.md "Freeze") --
     /// the pipeline itself never knows or cares whether the display is
     /// frozen.
+    /// Mid-capture permission-revocation detection (user report: "mic is
+    /// denied but the app just do nothing except showing 6 Hz freq and
+    /// -198 dB SPL"): revoking mic access does NOT stop an
+    /// already-granted process's engine -- coreaudiod keeps delivering
+    /// buffers of *exact digital zeros*, so hops flow, the start-time
+    /// permission gate never re-runs, and the FFT of pure silence reads
+    /// as bin 1 (~6 Hz) at the zero-signature SPL floor (~-198 dB). A
+    /// real mic never produces exact zeros (ADC dither/noise floor), but
+    /// loopback devices legitimately can (e.g. BlackHole with nothing
+    /// routed) -- so sustained exact silence alone is only a *trigger to
+    /// ask TCC*, and capture is stopped with the MIC ACCESS DENIED
+    /// indicator only if the permission status actually reports
+    /// non-granted.
+    private var consecutiveSilentHops = 0
+    /// Comfortably below MagnitudeScaling.floorDb (-120): only exact
+    /// digital silence lands here, never a quiet room.
+    private static let digitalSilenceThresholdDb: Double = -180
+    /// ~1s of hops before querying TCC -- one silent buffer at a device
+    /// switch shouldn't trigger a permission round-trip.
+    private static let silentHopsBeforePermissionCheck = 24
+
     private func receive(_ result: AnalysisResult) {
         lastHopAt = Date()
         stallRestartCount = 0
         isCaptureStalled = false
+
+        if result.splDb <= Self.digitalSilenceThresholdDb {
+            consecutiveSilentHops += 1
+            // == not >=: query TCC once per silence episode, not per hop.
+            if consecutiveSilentHops == Self.silentHopsBeforePermissionCheck,
+               AVAudioApplication.shared.recordPermission != .granted {
+                isMicAccessDenied = true
+                stop()
+                return
+            }
+        } else {
+            consecutiveSilentHops = 0
+        }
         guard let toPublish = freezeGate.receive(result) else { return }
         apply(toPublish)
     }

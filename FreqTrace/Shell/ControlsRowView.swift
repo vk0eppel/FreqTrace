@@ -82,7 +82,7 @@ struct ControlsRowView: View {
         let isStalled = trackedFrequencyViewModel.isCaptureActive
             && trackedFrequencyViewModel.isCaptureStalled
         return HStack(spacing: 6) {
-            LEDIndicator(isLit: true, color: isDisconnected || isStalled ? theme.danger : nil)
+            LEDIndicator(isLit: true, color: isDisconnected || isStalled || trackedFrequencyViewModel.isMicAccessDenied ? theme.danger : nil)
             Text("INPUT")
                 .font(.system(size: Typography.controlSize, weight: .medium))
                 .foregroundStyle(theme.textDim)
@@ -111,8 +111,18 @@ struct ControlsRowView: View {
                     .foregroundStyle(theme.textFaint)
             }
 
+            // Priority: DISCONNECTED (device gone -- the most specific
+            // diagnosis) > MIC ACCESS DENIED (device present, OS forbids
+            // capture; recovery is System Settings + Start) > CAPTURE
+            // UNAVAILABLE (running but stalled). Denied and stalled can't
+            // overlap in practice (denied means capture never started),
+            // but the explicit ordering keeps the plate single-message.
             if isDisconnected {
                 Text("DISCONNECTED")
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(theme.danger)
+            } else if trackedFrequencyViewModel.isMicAccessDenied {
+                Text("MIC ACCESS DENIED")
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(theme.danger)
             } else if isStalled {
