@@ -8,8 +8,10 @@
 //
 //  Appearance Mode (ticket #10, ADR 0005): AppShellView is where
 //  AppearanceSettings.mode actually becomes a Theme -- everything below
-//  reads \.theme from the environment (see Theme.swift), so the toggle in
-//  ControlsRowView only has to write one value here, not touch every view.
+//  reads \.theme from the environment (see Theme.swift), so the View
+//  menu's Appearance items only have to write one value, not touch every
+//  view. AppearanceSettings itself is owned by FreqTraceApp (menu commands
+//  live on the Scene, outside this view tree) and arrives via environment.
 //
 
 import AppKit
@@ -17,7 +19,7 @@ import SwiftUI
 
 struct AppShellView: View {
     @State private var trackedFrequencyViewModel = AudioPipelineViewModel()
-    @State private var appearanceSettings = AppearanceSettings()
+    @Environment(AppearanceSettings.self) private var appearanceSettings
     /// Bug fix history (user report: spacebar still typed into/erased the
     /// SPL Offset field): a hidden Button carrying .keyboardShortcut(.space)
     /// was tried first, with the button explicitly focused on appear to
@@ -60,7 +62,6 @@ struct AppShellView: View {
         .frame(minWidth: LayoutMetrics.minWindowWidth, minHeight: LayoutMetrics.minWindowHeight)
         .environment(\.theme, theme)
         .environment(trackedFrequencyViewModel)
-        .environment(appearanceSettings)
         .onAppear {
             installSpacebarShortcut()
             installClickAwayReset()
@@ -123,5 +124,6 @@ struct AppShellView: View {
 
 #Preview {
     AppShellView()
+        .environment(AppearanceSettings())
         .environment(\.theme, Theme(mode: .default))
 }
