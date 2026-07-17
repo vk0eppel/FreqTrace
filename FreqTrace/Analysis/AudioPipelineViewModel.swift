@@ -202,31 +202,39 @@ final class AudioPipelineViewModel {
         }
     }
 
-    /// Chains switch operations so at most one is ever in flight (bug fix,
-    /// second one -- user report: switching FFT size repeatedly eventually
-    /// froze the pipeline again even after the first fix below). Without
-    /// this, clicking a second FFT size before the first switch's Task had
-    /// finished captured the *same* `pipeline` as `oldPipeline` for both
-    /// (since the first switch hadn't reassigned `self.pipeline` yet) --
-    /// whichever Task's continuation resumed last "won" the final
-    /// self.pipeline assignment, silently leaking the other Task's
-    /// freshly-built pipeline, which was never explicitly stopped and kept
-    /// reading the shared ring buffer alongside the winner -- the exact
-    /// same dual-consumer corruption the explicit oldPipeline.stop() below
-    /// was meant to prevent, just reintroduced via overlapping switches
-    /// instead of a single one.
-    private var pendingFFTSwitchTask: Task<Void, Never>?
+    /// Serializes every operation that touches the capture engine or swaps
+    /// the analysis pipeline -- capture starts/stops, FFT size switches,
+    /// sample-rate adaptation -- so at most one is ever in flight. Two
+    /// hard-won reasons, both from field bugs: (1) a pipeline rebuild must
+    /// await the old pipeline's stop() before the new one reads the shared
+    /// ring buffer (single-consumer invariant -- overlapping FFT switches
+    /// once leaked a never-stopped pipeline that corrupted it, freezing
+    /// every readout), and (2) engine start/stop make synchronous mach IPC
+    /// into coreaudiod that can block for seconds when the daemon is busy
+    /// or wedged (user report: "the app freezes when i change the built in
+    /// mic to 44.1") -- so they must happen inside these queued operations,
+    /// where the main actor merely awaits, never on it directly.
+    private var pendingCaptureOperation: Task<Void, Never>?
+
+    private func enqueueCaptureOperation(_ operation: @escaping @MainActor () async -> Void) {
+        let previous = pendingCaptureOperation
+        pendingCaptureOperation = Task {
+            await previous?.value
+            await operation()
+        }
+    }
+
+    /// Bumped by every user-intent stop (Stop button, device disconnect).
+    /// Queued capture *starts* snapshot it when enqueued and abort if it
+    /// changed by the time they run or across their awaits -- otherwise a
+    /// watchdog restart queued just before the tech pressed Stop would
+    /// resurrect capture right after they stopped it.
+    private var stopGeneration = 0
 
     private func applyFFTWindowSizeChange() {
         let requestedSize = fftWindowSize
-        let previousTask = pendingFFTSwitchTask
-        pendingFFTSwitchTask = Task { [weak self] in
-            // Wait for any in-flight switch to fully finish (including its
-            // own capture restart) before this one reads any state --
-            // guarantees oldPipeline below is always whatever the most
-            // recent switch actually left behind, never a stale snapshot
-            // racing against it.
-            await previousTask?.value
+        let generation = stopGeneration
+        enqueueCaptureOperation { [weak self] in
             guard let self else { return }
             guard self.fftWindowSize == requestedSize else {
                 // Superseded by an even newer selection while this one was
@@ -238,26 +246,15 @@ final class AudioPipelineViewModel {
             let wasRunning = self.isCaptureActive
             let deviceID = self.selectedInputDeviceID
             let oldPipeline = self.pipeline
-            self.haltCapture()
-            let newConfig = requestedSize.config(sampleRate: self.config.sampleRate)
-
-            // Bug fix (user report: "waterfall and rta freeze and no more
-            // Tracked Frequency or SPL measures" after switching FFT
-            // size): haltCapture() above only cancels the view model's
-            // *consumer* streamTask, which indirectly tears down
-            // oldPipeline's internal pollTask via AsyncStream's
-            // onTermination -- not guaranteed to happen before the code
-            // below starts a brand-new pipeline reading the same shared
-            // ringBuffer. AudioRingBuffer is explicitly single-consumer
-            // (see its own header comment on the race its read()/
-            // readIndex discipline was built to prevent); two pipelines
-            // racing to read it corrupts that invariant and both end up
-            // stuck, never seeing a clean full hop again. Explicitly
-            // awaiting the old pipeline's stop() first guarantees it has
-            // actually stopped reading before the new one starts.
+            self.haltPublishing()
+            await self.captureEngine.stop()
+            // The old pipeline must have actually stopped reading the
+            // single-consumer ring buffer before a new one starts -- see
+            // pendingCaptureOperation's doc comment for the corruption
+            // this once caused.
             await oldPipeline.stop()
 
-            self.config = newConfig
+            self.config = requestedSize.config(sampleRate: self.config.sampleRate)
             // A brand-new AudioAnalysisPipeline also means a brand-new
             // internal AnomalyDetector/TimeAveragingBlender, so stale
             // tracking state from the old window size can't leak into the
@@ -266,13 +263,10 @@ final class AudioPipelineViewModel {
             // PEAK RESET should clear it -- window size doesn't invalidate
             // what's still a valid highest-level-seen for a given
             // frequency band).
-            self.pipeline = AudioAnalysisPipeline(config: newConfig, ringBuffer: self.ringBuffer, weighting: self.weighting, timeAveraging: self.timeAveraging)
-            guard wasRunning else { return }
-            if let deviceID {
-                self.startCapture(deviceID: deviceID, persistChoice: false)
-            } else {
-                self.start()
-            }
+            self.pipeline = AudioAnalysisPipeline(config: self.config, ringBuffer: self.ringBuffer, weighting: self.weighting, timeAveraging: self.timeAveraging)
+            guard wasRunning, self.stopGeneration == generation else { return }
+            guard let deviceID = deviceID ?? self.resolveDefaultDeviceID() else { return }
+            await self.performStartCapture(deviceID: deviceID, persistChoice: false, generation: generation)
         }
     }
 
@@ -317,6 +311,14 @@ final class AudioPipelineViewModel {
     /// stall.
     private var lastHopAt: Date?
     private static let stallTimeout: TimeInterval = 3
+    /// Consecutive watchdog restarts that have not yet produced a hop --
+    /// drives exponential backoff (3s, 6s, 12s, 24s, 48s cap) so a capture
+    /// stack that is *staying* broken isn't hammered with a full engine
+    /// teardown/rebuild every 3s forever (closed part of CLAUDE.md "Known
+    /// gap #2": that thrash rebuilt the mic's voice-isolation aggregate
+    /// device every cycle against an already-wedged coreaudiod, plausibly
+    /// making the wedge worse). Reset by the next real hop (receive(_:)).
+    private var stallRestartCount = 0
 
     /// Persists the tech's last explicit Input Device choice across
     /// launches (CONTEXT.md "Input Device").
@@ -341,6 +343,52 @@ final class AudioPipelineViewModel {
         deviceEnumerator.onChange = { [weak self] in self?.refreshAvailableDevices() }
         deviceEnumerator.startObserving()
         refreshAvailableDevices()
+
+        // See MicrophoneCaptureEngine.onConfigurationChange: the engine
+        // stops itself when the device's IO configuration changes under it
+        // (e.g. a sample-rate change in Audio MIDI Setup) -- restart
+        // promptly rather than waiting out the stall watchdog.
+        let captureEngine = captureEngine
+        Task { [weak self] in
+            await captureEngine.setConfigurationChangeHandler {
+                Task { @MainActor [weak self] in
+                    self?.handleEngineConfigurationChange()
+                }
+            }
+        }
+    }
+
+    /// Restarts capture after the engine invalidated itself (see
+    /// MicrophoneCaptureEngine.onConfigurationChange). Restarting re-reads
+    /// the hardware rate, so a rate change flows through the usual
+    /// sample-rate adaptation. Bounded via stallRestartCount: on a HAL sick
+    /// enough that every fresh engine immediately re-invalidates (observed
+    /// in the field with third-party audio drivers loaded), unlimited
+    /// prompt restarts would thrash the daemon in a tight loop -- after 3
+    /// consecutive attempts with no hop delivered, further notifications
+    /// are ignored and recovery is left to the watchdog's exponential
+    /// backoff. A real hop resets the count (receive(_:)).
+    private func handleEngineConfigurationChange() {
+        guard isCaptureActive, selectedInputDeviceID != nil else { return }
+        guard stallRestartCount < 3 else { return }
+        let captureEngine = captureEngine
+        Task { @MainActor [weak self] in
+            // Only restart if the engine actually stopped itself.
+            // AVAudioEngineConfigurationChange also fires for benign graph
+            // reconfigurations the engine survives (observed ~100ms after
+            // every successful start, engine still delivering buffers) --
+            // restarting on those tore capture down three times in a row on
+            // every Start press. A genuine device rate change stops the
+            // engine, so engineIsRunning is false by the time the
+            // notification arrives. If a benign notification races a real
+            // stop, the stall watchdog still recovers.
+            guard await !captureEngine.engineIsRunning else { return }
+            guard let self, self.isCaptureActive, let deviceID = self.selectedInputDeviceID else { return }
+            guard self.stallRestartCount < 3 else { return }
+            self.stallRestartCount += 1
+            diagLog.notice("Engine configuration changed (engine stopped itself), restarting capture at device=\(deviceID, privacy: .public) (attempt \(self.stallRestartCount, privacy: .public))")
+            self.startCapture(deviceID: deviceID, persistChoice: false)
+        }
     }
 
     /// Starts capturing and streaming analysis updates. Resolves which
@@ -354,15 +402,22 @@ final class AudioPipelineViewModel {
     func start() {
         guard !isCaptureActive else { return }
 
-        guard let deviceID = AudioDeviceSelector.resolve(
-            availableDevices: availableInputDevices,
-            persistedDeviceID: UserDefaults.standard.string(forKey: Self.persistedDeviceIDDefaultsKey),
-            systemDefaultDeviceID: deviceEnumerator.systemDefaultDeviceID()
-        ) else {
+        guard let deviceID = resolveDefaultDeviceID() else {
             // No input devices available at all -- stay stopped.
             return
         }
         startCapture(deviceID: deviceID, persistChoice: false)
+    }
+
+    /// The persisted-choice-falling-back-to-system-default resolution
+    /// start() has always performed, extracted so the FFT-switch rebuild
+    /// can reuse it for its cold-start restart case.
+    private func resolveDefaultDeviceID() -> String? {
+        AudioDeviceSelector.resolve(
+            availableDevices: availableInputDevices,
+            persistedDeviceID: UserDefaults.standard.string(forKey: Self.persistedDeviceIDDefaultsKey),
+            systemDefaultDeviceID: deviceEnumerator.systemDefaultDeviceID()
+        )
     }
 
     /// Explicit device selection from the Input Device picker (or a
@@ -373,8 +428,15 @@ final class AudioPipelineViewModel {
     }
 
     func stop() {
-        haltCapture()
+        stopGeneration += 1
+        haltPublishing()
         connectionState = connectionState.stopping()
+        // The engine's own stop makes blocking HAL calls -- queued off the
+        // main actor (see pendingCaptureOperation), while the state changes
+        // above take effect immediately so the UI reads Stopped at once.
+        enqueueCaptureOperation { [weak self] in
+            await self?.captureEngine.stop()
+        }
     }
 
     /// Stop/Start as a single toggle (spacebar shortcut, AppShellView) --
@@ -404,22 +466,47 @@ final class AudioPipelineViewModel {
         startCapture(deviceID: deviceID, persistChoice: false)
     }
 
+    /// Enqueues a capture (re)start -- the actual work happens in
+    /// performStartCapture inside the serialized operation chain, off the
+    /// main actor's critical path (see pendingCaptureOperation). The
+    /// stopGeneration snapshot is taken here, at enqueue time: a Stop
+    /// pressed between enqueue and run must win.
+    private func startCapture(deviceID: String, persistChoice: Bool) {
+        let generation = stopGeneration
+        enqueueCaptureOperation { [weak self] in
+            guard let self, self.stopGeneration == generation else { return }
+            await self.performStartCapture(deviceID: deviceID, persistChoice: persistChoice, generation: generation)
+        }
+    }
+
     /// Attempts to (re)start capture at `deviceID`. On success, updates
     /// `selectedInputDeviceID`/`connectionState` and persists the choice if
     /// requested. On failure, leaves neither stale -- resets to `.stopped`
     /// rather than reporting a device as selected/running that never
-    /// actually started (found by code review on #4).
-    private func startCapture(deviceID: String, persistChoice: Bool) {
-        haltCapture()
+    /// actually started (found by code review on #4). Only ever runs inside
+    /// the serialized capture-operation chain; `generation` re-checks after
+    /// every await abort cleanly if a Stop landed mid-flight.
+    private func performStartCapture(deviceID: String, persistChoice: Bool, generation: Int) async {
+        haltPublishing()
+        await captureEngine.stop()
+        guard stopGeneration == generation else { return }
 
         let coreAudioDeviceID = deviceEnumerator.deviceID(forUID: deviceID)
+        let hardwareRate: Double
         do {
-            try captureEngine.start(deviceID: coreAudioDeviceID)
+            hardwareRate = try await captureEngine.start(deviceID: coreAudioDeviceID)
         } catch {
             // No hardware/permission in this environment (or denied by the
             // user), or the device vanished between resolving it and
             // starting -- readouts stay at their placeholder state.
-            connectionState = .stopped
+            if stopGeneration == generation { connectionState = .stopped }
+            return
+        }
+        guard stopGeneration == generation else {
+            // Stop landed while the engine was starting -- shut the engine
+            // straight back down rather than leaving it capturing into a
+            // ring buffer nothing reads.
+            await captureEngine.stop()
             return
         }
 
@@ -429,6 +516,37 @@ final class AudioPipelineViewModel {
         selectedInputDeviceID = deviceID
         connectionState = connectionState.selecting(deviceID: deviceID)
 
+        // Sample-rate adaptation (closed the former CLAUDE.md "Known gap"):
+        // the engine only knows the hardware's actual input rate once it
+        // has started, and AnalysisConfig's 48kHz default is just a nominal
+        // guess -- on 44.1kHz hardware every frequency readout would
+        // otherwise be ~8.8% sharp (bin index x wrong bin width). On
+        // mismatch, rebuild the pipeline at the actual rate before starting
+        // the result stream; the engine itself keeps running (it's already
+        // capturing at the right rate into the ring buffer), so this is a
+        // pipeline-only rebuild, not a capture restart. Runs inline here --
+        // the whole method is already serialized and off the UI's critical
+        // path, so no separately-chained task is needed.
+        if hardwareRate != config.sampleRate {
+            let oldPipeline = pipeline
+            await oldPipeline.stop()
+            config = fftWindowSize.config(sampleRate: hardwareRate)
+            // Fresh pipeline also means fresh AnomalyDetector/
+            // TimeAveragingBlender state, same as an FFT-size switch; held
+            // peaks are deliberately left untouched, same reasoning as
+            // there.
+            pipeline = AudioAnalysisPipeline(config: config, ringBuffer: ringBuffer, weighting: weighting, timeAveraging: timeAveraging)
+            guard stopGeneration == generation else { return }
+        }
+
+        beginStreaming()
+    }
+
+    /// Starts consuming the pipeline's result stream and arms the stall
+    /// watchdog -- the tail of a successful capture start, split out of
+    /// startCapture so the sample-rate adaptation path above can defer it
+    /// until after its pipeline rebuild.
+    private func beginStreaming() {
         let pipeline = pipeline
         streamTask = Task { [weak self] in
             let stream = await pipeline.start()
@@ -444,10 +562,13 @@ final class AudioPipelineViewModel {
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 guard let self, !Task.isCancelled, self.isCaptureActive else { continue }
+                // Exponential backoff -- see stallRestartCount's doc comment.
+                let timeout = Self.stallTimeout * pow(2, Double(min(self.stallRestartCount, 4)))
                 guard let lastHopAt = self.lastHopAt,
-                      Date().timeIntervalSince(lastHopAt) > Self.stallTimeout else { continue }
+                      Date().timeIntervalSince(lastHopAt) > timeout else { continue }
                 guard let deviceID = self.selectedInputDeviceID else { continue }
-                diagLog.notice("Watchdog: no hop in \(Self.stallTimeout, privacy: .public)s, restarting capture at device=\(deviceID, privacy: .public)")
+                diagLog.notice("Watchdog: no hop in \(timeout, privacy: .public)s, restarting capture at device=\(deviceID, privacy: .public) (attempt \(self.stallRestartCount + 1, privacy: .public))")
+                self.stallRestartCount += 1
                 self.startCapture(deviceID: deviceID, persistChoice: false)
             }
         }
@@ -459,6 +580,7 @@ final class AudioPipelineViewModel {
     /// frozen.
     private func receive(_ result: AnalysisResult) {
         lastHopAt = Date()
+        stallRestartCount = 0
         guard let toPublish = freezeGate.receive(result) else { return }
         apply(toPublish)
     }
@@ -504,8 +626,15 @@ final class AudioPipelineViewModel {
 
         switch (connectionState, nextState) {
         case (.running, .disconnected):
-            haltCapture()
+            // A disconnect is a stop from the user's perspective (ADR 0006:
+            // never a silent fallback) -- bump stopGeneration so any queued
+            // restart against the vanished device aborts.
+            stopGeneration += 1
+            haltPublishing()
             connectionState = nextState
+            enqueueCaptureOperation { [weak self] in
+                await self?.captureEngine.stop()
+            }
         case (.disconnected, .running(let deviceID)):
             startCapture(deviceID: deviceID, persistChoice: false)
         default:
@@ -513,19 +642,25 @@ final class AudioPipelineViewModel {
         }
     }
 
-    /// Stops the underlying pipeline. If the display is frozen (CONTEXT.md
-    /// "Freeze"), the on-screen snapshot is left exactly as-is rather than
-    /// force-cleared to a placeholder -- Stop (or a disconnect) happening
-    /// underneath a frozen display must not itself count as an "on-screen
-    /// update" (found by code review: this previously cleared the three
-    /// published properties directly, bypassing `freezeGate`, so Stop while
-    /// frozen silently blanked what was supposed to be a static snapshot).
-    private func haltCapture() {
+    /// Stops consuming/publishing pipeline results (stream + watchdog +
+    /// published values). Deliberately does NOT stop the capture engine --
+    /// its stop() makes blocking HAL calls, so engine stops always go
+    /// through the serialized capture-operation chain instead (see
+    /// pendingCaptureOperation; user report of the freeze this caused:
+    /// "the app freezes when i change the built in mic to 44.1").
+    ///
+    /// If the display is frozen (CONTEXT.md "Freeze"), the on-screen
+    /// snapshot is left exactly as-is rather than force-cleared to a
+    /// placeholder -- Stop (or a disconnect) happening underneath a frozen
+    /// display must not itself count as an "on-screen update" (found by
+    /// code review: this previously cleared the three published properties
+    /// directly, bypassing `freezeGate`, so Stop while frozen silently
+    /// blanked what was supposed to be a static snapshot).
+    private func haltPublishing() {
         streamTask?.cancel()
         streamTask = nil
         watchdogTask?.cancel()
         watchdogTask = nil
-        captureEngine.stop()
         guard !isFrozen else { return }
         trackedFrequencyHz = nil
         latestMagnitudes = []

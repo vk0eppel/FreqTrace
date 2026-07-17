@@ -15,8 +15,10 @@ import Foundation
 // background actor and FrequencyTracker without hopping to the main actor.
 nonisolated struct AnalysisConfig: Sendable, Equatable {
     /// Samples per second the FFT window/hop below are sized for. The
-    /// capture side (MicrophoneCaptureEngine) reports the audio hardware's
-    /// actual native rate, which may differ from this default.
+    /// 48kHz default is nominal: once capture starts, MicrophoneCaptureEngine
+    /// reports the hardware's actual native rate, and AudioPipelineViewModel
+    /// rebuilds the pipeline at that rate if it differs (see its
+    /// performStartCapture(deviceID:persistChoice:generation:)).
     var sampleRate: Double
 
     /// FFT window size in samples. Must be a power of two.
