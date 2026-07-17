@@ -45,6 +45,22 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     /// of actual loudness (a real bug found via user report).
     let fullScalePower: Float
 
+    /// Per-bin linear power gains for every Weighting, precomputed once at
+    /// init (perf fix -- `sample` showed the pow/log10 in the old
+    /// per-call linearPowerGain(atFrequency:weighting:) hot on the
+    /// pipeline thread: three call sites each re-derived the same
+    /// ~windowSize/2 gains from scratch on every hop, ~280k transcendental
+    /// evaluations/second at the default config). All three weightings are
+    /// built eagerly rather than lazily on first use, preserving this
+    /// class's documented @unchecked Sendable invariant: all stored state
+    /// is set in init and never mutated. Index 0 (DC) is always 0 --
+    /// gainDb is -inf at 0Hz, so DC weights to silence, same as before.
+    /// Gains are in the power domain (dB/10, not dB/20): magnitudes[] from
+    /// vDSP_zvmags is power (amplitude^2), so the weighting gain (an
+    /// amplitude-domain dB value) is applied twice in the dB->linear
+    /// conversion to stay in power terms.
+    private let gainTables: [Weighting: [Float]]
+
     init(config: AnalysisConfig) {
         precondition(
             config.windowSize > 0 && (config.windowSize & (config.windowSize - 1)) == 0,
@@ -72,6 +88,16 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
             in: referenceTone, hannWindow: window, fftSetup: setup, log2n: log2n, windowSize: config.windowSize
         ) ?? []
         self.fullScalePower = referenceMagnitudes.reduce(0, +)
+
+        let binCount = config.windowSize / 2
+        let binHz = config.sampleRate / Double(config.windowSize)
+        var tables: [Weighting: [Float]] = [:]
+        for weighting in Weighting.allCases {
+            tables[weighting] = (0..<binCount).map { bin in
+                Float(pow(10, weighting.gainDb(at: Double(bin) * binHz) / 10))
+            }
+        }
+        self.gainTables = tables
     }
 
     deinit {
@@ -127,27 +153,23 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     /// raw output directly, so a genuine low-frequency resonance isn't
     /// hidden by A-weighting's roll-off (ADR 0001).
     func weightedSpectrum(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> [Float] {
-        let binHz = config.sampleRate / Double(config.windowSize)
-        return magnitudes.enumerated().map { bin, magnitude in
-            let frequency = Double(bin) * binHz
-            return magnitude * linearPowerGain(atFrequency: frequency, weighting: weighting)
-        }
+        let table = gainTables[weighting] ?? []
+        return zip(magnitudes, table).map(*)
     }
 
     /// Shared by trackedFrequency(fromMagnitudes:weighting:) and
     /// trackedFrequencyLevelDb(fromMagnitudes:weighting:) so both derive
     /// from the same weighted argmax rather than each re-running it.
     private func bestWeightedBin(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Int? {
-        let binHz = config.sampleRate / Double(config.windowSize)
-        let nyquist = config.sampleRate / 2
+        let table = gainTables[weighting] ?? []
 
         var bestBin = -1
         var bestWeightedMagnitude: Float = -Float.greatestFiniteMagnitude
-        // Bin 0 is DC (no meaningful frequency) -- skip it.
-        for bin in 1..<magnitudes.count {
-            let frequency = Double(bin) * binHz
-            guard frequency <= nyquist else { break }
-            let weighted = magnitudes[bin] * linearPowerGain(atFrequency: frequency, weighting: weighting)
+        // Bin 0 is DC (no meaningful frequency) -- skip it. Bins never
+        // exceed Nyquist by construction (magnitudes has windowSize/2
+        // entries, and bin windowSize/2 would be Nyquist itself).
+        for bin in 1..<min(magnitudes.count, table.count) {
+            let weighted = magnitudes[bin] * table[bin]
             if weighted > bestWeightedMagnitude {
                 bestWeightedMagnitude = weighted
                 bestBin = bin
@@ -155,14 +177,6 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         }
 
         return bestBin > 0 ? bestBin : nil
-    }
-
-    /// magnitudes[] from vDSP_zvmags is power (amplitude^2), so the
-    /// weighting gain (an amplitude-domain dB value) is applied twice in
-    /// the dB->linear conversion to stay in power terms. Shared by every
-    /// place a per-bin weighting gain is needed.
-    private func linearPowerGain(atFrequency frequency: Double, weighting: Weighting) -> Float {
-        Float(pow(10, weighting.gainDb(at: frequency) / 10))
     }
 
     /// Weighted overall level in dB from an already-computed magnitude
@@ -173,11 +187,10 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     /// since an overall level describes the whole spectrum's energy, not
     /// one dominant frequency.
     func weightedLevelDb(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Double {
-        let binHz = config.sampleRate / Double(config.windowSize)
+        let table = gainTables[weighting] ?? []
         var weightedPower: Double = 0
-        for bin in 1..<magnitudes.count {
-            let frequency = Double(bin) * binHz
-            weightedPower += Double(magnitudes[bin] * linearPowerGain(atFrequency: frequency, weighting: weighting))
+        for bin in 1..<min(magnitudes.count, table.count) {
+            weightedPower += Double(magnitudes[bin] * table[bin])
         }
         guard fullScalePower > 0 else { return -Double.infinity }
         return 10 * log10(max(weightedPower, 1e-12) / Double(fullScalePower))

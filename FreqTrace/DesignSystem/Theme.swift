@@ -23,25 +23,42 @@ extension Color {
 
 struct Theme {
     let mode: AppearanceMode
-    private let tokens: ColorTokens
+
+    // Stored, not computed (perf fix -- `sample` showed HexColor.rgb/
+    // Color(hex:) hot on the main thread: every view reads these every
+    // body evaluation, and the waterfall/RTA re-render at display rate, so
+    // computed properties re-parsed the same hex strings thousands of
+    // times per second). A Theme is only constructed on an appearance-mode
+    // change, so parsing once here is effectively free.
+    let bg: Color
+    let surface: Color
+    let surfaceRaised: Color
+    let border: Color
+    let borderSoft: Color
+    let text: Color
+    let textDim: Color
+    let textFaint: Color
+    let accent: Color
+    let accentDim: Color
+    let danger: Color
+    let warn: Color
 
     init(mode: AppearanceMode) {
         self.mode = mode
-        self.tokens = DesignTokens.tokens(for: mode)
+        let tokens = DesignTokens.tokens(for: mode)
+        self.bg = Color(hex: tokens.bg)
+        self.surface = Color(hex: tokens.surface)
+        self.surfaceRaised = Color(hex: tokens.surfaceRaised)
+        self.border = Color(hex: tokens.border)
+        self.borderSoft = Color(hex: tokens.borderSoft)
+        self.text = Color(hex: tokens.text)
+        self.textDim = Color(hex: tokens.textDim)
+        self.textFaint = Color(hex: tokens.textFaint)
+        self.accent = Color(hex: tokens.accent)
+        self.accentDim = Color(hex: tokens.accentDim)
+        self.danger = Color(hex: tokens.danger)
+        self.warn = Color(hex: tokens.warn)
     }
-
-    var bg: Color { Color(hex: tokens.bg) }
-    var surface: Color { Color(hex: tokens.surface) }
-    var surfaceRaised: Color { Color(hex: tokens.surfaceRaised) }
-    var border: Color { Color(hex: tokens.border) }
-    var borderSoft: Color { Color(hex: tokens.borderSoft) }
-    var text: Color { Color(hex: tokens.text) }
-    var textDim: Color { Color(hex: tokens.textDim) }
-    var textFaint: Color { Color(hex: tokens.textFaint) }
-    var accent: Color { Color(hex: tokens.accent) }
-    var accentDim: Color { Color(hex: tokens.accentDim) }
-    var danger: Color { Color(hex: tokens.danger) }
-    var warn: Color { Color(hex: tokens.warn) }
 }
 
 private struct ThemeKey: EnvironmentKey {

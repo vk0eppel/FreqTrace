@@ -44,8 +44,25 @@ struct RTAView: View {
     @State private var displayedBars: [Float] = []
     @State private var lastTickDate: Date?
 
+    /// True once the eased bars have fully caught up with the latest hop's
+    /// targets -- used to pause the TimelineView below (perf fix, user
+    /// report: "the RTA seems to consume more CPU"): an .animation
+    /// schedule otherwise ticks at full display rate (120Hz on ProMotion)
+    /// forever, re-rendering the Canvas even when every bar already sits
+    /// exactly on target (frozen display, capture stopped, or simply the
+    /// ~5 display frames between hops after ballistics converge). Reading
+    /// pipeline.latestRTABars here means Observation re-evaluates body --
+    /// and thus un-pauses -- the moment the next hop lands.
+    private var isConverged: Bool {
+        displayedBars == pipeline.latestRTABars
+    }
+
     var body: some View {
-        TimelineView(.animation) { timeline in
+        // minimumInterval 1/60: the ballistics span ~100ms (see
+        // advanceSmoothing), so 60Hz is comfortably smooth for meter bars
+        // -- ticking at a ProMotion display's native 120Hz just doubled
+        // the redraw work for motion no faster than a real meter's.
+        TimelineView(.animation(minimumInterval: 1.0 / 60.0, paused: isConverged)) { timeline in
             Canvas { context, size in
                 let barsPerOctave = pipeline.bandingResolution.rawValue
                 guard !displayedBars.isEmpty else { return }
@@ -59,14 +76,14 @@ struct RTAView: View {
                 // 1kHz, so evenly dividing the canvas by index drifted out
                 // of sync with the x-axis labels, which position by true
                 // frequency.
-                let edges = RTABinning.bandEdges(barsPerOctave: barsPerOctave)
+                let positions = RTABarPositionCache.positions(barsPerOctave: barsPerOctave)
                 let gap: CGFloat = 2
 
                 for (index, normalized) in displayedBars.enumerated() {
-                    guard index < edges.count else { break }
-                    let edge = edges[index]
-                    let xStart = CGFloat(FrequencyAxis.normalizedPosition(forHz: edge.lowerHz)) * size.width
-                    let xEnd = CGFloat(FrequencyAxis.normalizedPosition(forHz: edge.upperHz)) * size.width
+                    guard index < positions.count else { break }
+                    let position = positions[index]
+                    let xStart = position.start * size.width
+                    let xEnd = position.end * size.width
                     let barWidth = max(1, xEnd - xStart - gap)
                     let barHeight = size.height * CGFloat(normalized)
                     let rect = CGRect(x: xStart, y: size.height - barHeight, width: barWidth, height: barHeight)
@@ -106,6 +123,12 @@ struct RTAView: View {
             return
         }
 
+        // Already on target: write no state at all (a @State write, even
+        // of an equal value, invalidates the view and re-renders the
+        // Canvas). Together with `isConverged` pausing the TimelineView,
+        // this is what actually stops the idle-redraw treadmill.
+        guard displayedBars != targets else { return }
+
         guard let lastTickDate else {
             self.lastTickDate = now
             return
@@ -130,6 +153,35 @@ struct RTAView: View {
                 displayedBars[index] += diff > 0 ? maxStep : -maxStep
             }
         }
+    }
+}
+
+/// Memoizes each banding resolution's normalized bar x-positions (perf
+/// fix, same user report as `isConverged`): RTABinning.bandEdges plus two
+/// FrequencyAxis.normalizedPosition log10 calls per bar were recomputed
+/// inside the Canvas on every redraw, though they depend only on
+/// barsPerOctave -- at 1/48 octave that was ~1000 log evaluations per
+/// frame. At most a handful of resolutions ever get cached, so the cache
+/// is never evicted.
+@MainActor
+private enum RTABarPositionCache {
+    struct BarPosition {
+        let start: CGFloat
+        let end: CGFloat
+    }
+
+    private static var cache: [Int: [BarPosition]] = [:]
+
+    static func positions(barsPerOctave: Int) -> [BarPosition] {
+        if let cached = cache[barsPerOctave] { return cached }
+        let positions = RTABinning.bandEdges(barsPerOctave: barsPerOctave).map { edge in
+            BarPosition(
+                start: CGFloat(FrequencyAxis.normalizedPosition(forHz: edge.lowerHz)),
+                end: CGFloat(FrequencyAxis.normalizedPosition(forHz: edge.upperHz))
+            )
+        }
+        cache[barsPerOctave] = positions
+        return positions
     }
 }
 
