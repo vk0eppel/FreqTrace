@@ -13,6 +13,57 @@
 import MetalKit
 import SwiftUI
 
+/// MTKView that pauses its render loop while its window is fully occluded
+/// (bug fix -- user report: "app freezes after sample rate change to 44.1",
+/// which turned out to be unrelated to sample rate: diagnosed via `sample`
+/// of the "frozen" process, whose main thread was spending ~40% of its time
+/// parked in CAMetalLayer nextDrawable 1s-timeout semaphore waits with the
+/// GPU idle). When another window fully covers this one (the user was in
+/// Audio MIDI Setup), the compositor stops consuming presented drawables,
+/// the layer's drawable pool never recycles, and a continuously-drawing
+/// MTKView (isPaused = false) then blocks the main thread ~1s per draw call
+/// waiting for a drawable that can only free up once the window is visible
+/// again -- indistinguishable from a hard freeze, recovering only after an
+/// event backlog drains. Pausing on occlusion sidesteps the whole class:
+/// no drawables are requested while nothing would display them anyway.
+/// Un-pausing needs no catch-up logic -- WaterfallRenderer.draw always
+/// renders current state, and the scroll position is wall-clock-derived.
+final class OcclusionPausingMTKView: MTKView {
+    private var occlusionObserver: (any NSObjectProtocol)?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+            self.occlusionObserver = nil
+        }
+        guard let window else { return }
+        updatePauseState(for: window)
+        occlusionObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.didChangeOcclusionStateNotification,
+            object: window,
+            queue: .main
+        ) { [weak self] notification in
+            // Delivered on the main queue (specified above), so hopping to
+            // the main actor is a formality the compiler can't see through.
+            MainActor.assumeIsolated {
+                guard let self, let window = notification.object as? NSWindow else { return }
+                self.updatePauseState(for: window)
+            }
+        }
+    }
+
+    private func updatePauseState(for window: NSWindow) {
+        isPaused = !window.occlusionState.contains(.visible)
+    }
+
+    deinit {
+        if let occlusionObserver {
+            NotificationCenter.default.removeObserver(occlusionObserver)
+        }
+    }
+}
+
 struct MetalWaterfallView: NSViewRepresentable {
     /// Owned by WaterfallZoneView, not created here (hover tooltip feature):
     /// WaterfallZoneView needs the same renderer instance to query
@@ -51,7 +102,7 @@ struct MetalWaterfallView: NSViewRepresentable {
     // SwiftUI re-render) instead of `context.coordinator` keeps the MTKView
     // wired to whichever renderer WaterfallZoneView currently owns.
     func makeNSView(context: Context) -> MTKView {
-        let view = MTKView()
+        let view = OcclusionPausingMTKView()
         view.device = MTLCreateSystemDefaultDevice()
         view.delegate = renderer
         view.colorPixelFormat = .bgra8Unorm
