@@ -17,6 +17,7 @@
 //  Frequency.
 //
 
+import AVFAudio
 import CoreAudio
 import Foundation
 import Observation
@@ -515,6 +516,24 @@ final class AudioPipelineViewModel {
     /// every await abort cleanly if a Stop landed mid-flight.
     private func performStartCapture(deviceID: String, persistChoice: Bool, generation: Int) async {
         haltPublishing()
+
+        // Mic-permission race fix (closes ADR 0007's underlying bug, which
+        // "measurements start off" only worked around): starting the
+        // engine while macOS's asynchronous permission prompt is still
+        // unanswered used to leave capture silently dead with no retry --
+        // the engine "started" but the tap never fired. Explicitly request
+        // permission and await the user's answer *before* touching the
+        // engine: returns immediately when already granted or denied, and
+        // only actually prompts on first use. Runs inside the serialized
+        // capture chain, so nothing else races the engine meanwhile; a
+        // denial lands in the same .stopped state as any other failed
+        // start. Not unit-testable (TCC-bound, needs a real prompt).
+        guard await AVAudioApplication.requestRecordPermission() else {
+            if stopGeneration == generation { connectionState = .stopped }
+            return
+        }
+        guard stopGeneration == generation else { return }
+
         await installConfigurationChangeHandlerIfNeeded()
         await captureEngine.stop()
         guard stopGeneration == generation else { return }
