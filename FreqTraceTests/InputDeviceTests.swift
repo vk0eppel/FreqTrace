@@ -124,4 +124,17 @@ struct DeviceConnectionStateTests {
 
         #expect(next == .disconnected(deviceID: "usb-interface"))
     }
+
+    // ticket #17: picking a device only starts capture from an active state.
+    @Test func pickWhileStoppedOnlySelectsAndDoesNotStart() {
+        #expect(DeviceConnectionState.stopped.pickStartsCapture == false)
+    }
+
+    @Test func pickWhileRunningRestartsCapture() {
+        #expect(DeviceConnectionState.running(deviceID: "usb-interface").pickStartsCapture == true)
+    }
+
+    @Test func pickWhileDisconnectedResumesCapture() {
+        #expect(DeviceConnectionState.disconnected(deviceID: "usb-interface").pickStartsCapture == true)
+    }
 }

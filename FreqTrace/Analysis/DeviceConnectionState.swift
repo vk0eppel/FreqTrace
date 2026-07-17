@@ -42,10 +42,33 @@ nonisolated enum DeviceConnectionState: Equatable, Sendable {
         }
     }
 
-    /// A user picking a device (initial selection, switching devices, or
-    /// reconnecting from `.disconnected`) always (re)starts capture/playback.
+    /// The state a device pick lands in *once capture has actually started*
+    /// -- switching the live pipeline's device, or reconnecting from
+    /// `.disconnected`. Not reached by a pick made while `.stopped` (ticket
+    /// #17): that only records the selection and stays `.stopped` -- see
+    /// `pickStartsCapture`.
     func selecting(deviceID: String) -> DeviceConnectionState {
         .running(deviceID: deviceID)
+    }
+
+    /// Whether picking a device from this state should (re)start capture, or
+    /// merely record the selection for the next Start (ticket #17). From
+    /// `.stopped`, a pick only selects -- capture stays off until a
+    /// deliberate Start, so the mic-permission prompt never appears as a
+    /// side effect of a device pick (ADR 0007: measurements start off).
+    /// From `.running` (re-point the live pipeline) or `.disconnected`
+    /// (mid-show "my mic died, here's the replacement, go"), a pick starts
+    /// capture immediately. The always-start behavior predates ADR 0007 --
+    /// it was written when the app auto-started capture at launch and a
+    /// pick meant "re-point the running pipeline"; that stays true for the
+    /// two active states, but no longer for `.stopped`.
+    var pickStartsCapture: Bool {
+        switch self {
+        case .stopped:
+            return false
+        case .running, .disconnected:
+            return true
+        }
     }
 
     /// The explicit Stop control (CONTEXT.md "Stop") -- or, for the Signal

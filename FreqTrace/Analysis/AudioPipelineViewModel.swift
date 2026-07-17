@@ -456,11 +456,46 @@ final class AudioPipelineViewModel {
         )
     }
 
-    /// Explicit device selection from the Input Device picker (or a
-    /// reconnect from the disconnected state): always (re)starts capture at
-    /// the chosen device and persists it as the new last explicit choice.
+    /// Explicit device selection from the Input Device picker. What it does
+    /// depends on the current state (ticket #17, DeviceConnectionState.
+    /// pickStartsCapture): while capture is running (re-point the live
+    /// pipeline) or disconnected (mid-show device swap), it (re)starts
+    /// capture at the chosen device; while stopped, it only records the
+    /// selection so the *next* Start captures from it -- capture stays off
+    /// and no mic-permission prompt appears (ADR 0007: measurements start
+    /// off, the prompt appears only in response to a deliberate Start). The
+    /// chosen device is persisted as the new last explicit choice in every
+    /// case.
     func selectInputDevice(id: String) {
-        startCapture(deviceID: id, persistChoice: true)
+        if connectionState.pickStartsCapture {
+            startCapture(deviceID: id, persistChoice: true)
+        } else {
+            selectStoppedInputDevice(id: id)
+        }
+    }
+
+    /// Records an Input Device pick made while capture is stopped, without
+    /// touching the capture engine (ticket #17): updates the picker label
+    /// (`selectedInputDeviceID`) and its format sub-caption
+    /// (`selectedInputDeviceFormat`), and persists the choice so both the
+    /// next Start (`resumeCapture` reads `selectedInputDeviceID`) and the
+    /// next launch (`resolveDefaultDeviceID` reads the persisted key) use
+    /// it. `connectionState` stays `.stopped` -- the engine is never
+    /// started here, so no permission prompt is triggered.
+    private func selectStoppedInputDevice(id: String) {
+        UserDefaults.standard.set(id, forKey: Self.persistedDeviceIDDefaultsKey)
+        recordSelectedInputDevice(id: id)
+    }
+
+    /// Updates the Input Device picker's label (`selectedInputDeviceID`) and
+    /// its format sub-caption (`selectedInputDeviceFormat`) to reflect the
+    /// active/chosen device. Shared by the stopped-state pick and the
+    /// successful-start path (`performStartCapture`) so the format lookup
+    /// can't drift between them; persistence and `connectionState` differ
+    /// between the two callers and stay at the call sites.
+    private func recordSelectedInputDevice(id: String) {
+        selectedInputDeviceID = id
+        selectedInputDeviceFormat = deviceEnumerator.format(forUID: id)
     }
 
     func stop() {
@@ -571,8 +606,7 @@ final class AudioPipelineViewModel {
         if persistChoice {
             UserDefaults.standard.set(deviceID, forKey: Self.persistedDeviceIDDefaultsKey)
         }
-        selectedInputDeviceID = deviceID
-        selectedInputDeviceFormat = deviceEnumerator.format(forUID: deviceID)
+        recordSelectedInputDevice(id: deviceID)
         connectionState = connectionState.selecting(deviceID: deviceID)
 
         // Sample-rate adaptation (closed the former CLAUDE.md "Known gap"):
