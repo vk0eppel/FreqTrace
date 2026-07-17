@@ -3,15 +3,14 @@
 //  FreqTrace
 //
 //  Two-line Controls row (see CLAUDE.md Frontend):
-//  Line 1 -- Weighting (live, ticket #3), Time Averaging (live, ticket #7),
-//  Peak reset (live, ticket #12), Freeze/Stop (live, ticket #13), Signal
-//  Generator (live, ticket #9, sine frequency control added ticket #14).
+//  Line 1 -- Weighting (ticket #3), FFT Size, Time Averaging (ticket #7),
+//  Peak reset (ticket #12), Freeze/Stop (ticket #13) -- purely
+//  analysis/view controls. Line 2 -- Input Device (ticket #4, left), and
+//  the Signal Generator cluster (ticket #9, sine frequency control ticket
+//  #14) directly left of the Output Device (ticket #14) it plays through.
 //  SPL Offset lives in the Measured Data row's SPL block instead (ticket
-//  #6), alongside the
-//  reading it offsets, not here. Line 2 -- Input Device (live, ticket #4),
-//  Appearance Mode (live, ticket #10, center), Output Device (live, ticket
-//  #14). Remaining groups are still placeholders pending their own
-//  tickets.
+//  #6), alongside the reading it offsets, not here. Appearance Mode moved
+//  to the View menu (ADR 0005 addendum).
 //
 
 import SwiftUI
@@ -19,7 +18,6 @@ import SwiftUI
 struct ControlsRowView: View {
     @Environment(\.theme) private var theme
     @Environment(AudioPipelineViewModel.self) private var trackedFrequencyViewModel
-    @Environment(AppearanceSettings.self) private var appearanceSettings
     @State private var signalGenerator = SignalGeneratorEngine()
 
     var body: some View {
@@ -41,60 +39,27 @@ struct ControlsRowView: View {
             peakResetControl
             freezeStopControl
             Spacer(minLength: 0)
-            SignalGeneratorControlView(engine: signalGenerator)
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
     }
 
+    // Line 2 is Input Device (left) / Signal Generator + Output Device
+    // (right). The generator cluster moved down from Line 1's right side
+    // (user request), landing directly left of the Output Device it plays
+    // through -- the generator and its output routing now read as one
+    // group, and Line 1 is purely analysis/view controls. The Appearance
+    // selector that used to sit centered here moved to the View menu (ADR
+    // 0005 addendum).
     private var line2: some View {
-        // True three-way split (not a double-Spacer, which only centers
-        // "Appearance" when the left/right content happen to be equal
-        // width) -- side groups get equal flexible width via .frame, and
-        // "Appearance" is centered as an overlay independent of their content.
-        HStack(spacing: 0) {
+        HStack(spacing: 8) {
             inputDeviceControl
-                .frame(maxWidth: .infinity, alignment: .leading)
+            Spacer(minLength: 0)
+            SignalGeneratorControlView(engine: signalGenerator)
             outputDeviceControl
-                .frame(maxWidth: .infinity, alignment: .trailing)
-        }
-        .overlay {
-            appearanceControl
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 9)
-    }
-
-    // Appearance Mode (ticket #10, ADR 0005): a manual Dark/Light toggle,
-    // deliberately independent of the macOS system appearance setting --
-    // Dark (default) for dim venues, high-contrast Light for direct
-    // sunlight. Writes straight to AppearanceSettings.mode, which
-    // AppShellView turns into the injected Theme every view reads.
-    private var appearanceControl: some View {
-        HStack(spacing: 10) {
-            Text("APPEARANCE")
-                .font(.system(size: Typography.controlSize, weight: .medium))
-                .foregroundStyle(theme.textDim)
-            ForEach(AppearanceMode.allCases) { mode in
-                appearanceButton(mode)
-            }
-        }
-        .consolePlate()
-    }
-
-    private func appearanceButton(_ mode: AppearanceMode) -> some View {
-        let isSelected = appearanceSettings.mode == mode
-        return Button {
-            appearanceSettings.mode = mode
-        } label: {
-            HStack(spacing: 4) {
-                LEDIndicator(isLit: isSelected)
-                Text(mode.rawValue.uppercased())
-                    .font(.system(size: Typography.controlSize, weight: .semibold))
-                    .foregroundStyle(isSelected ? theme.text : theme.textDim)
-            }
-        }
-        .buttonStyle(.plain)
     }
 
     // The Input Device control (ticket #4, CONTEXT.md "Input Device"): a
@@ -379,6 +344,5 @@ struct ControlsRowView: View {
     ControlsRowView()
         .environment(\.theme, Theme(mode: .dark))
         .environment(AudioPipelineViewModel())
-        .environment(AppearanceSettings())
         .frame(width: 1120)
 }
