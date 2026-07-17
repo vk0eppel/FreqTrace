@@ -88,6 +88,16 @@ final class AudioPipelineViewModel {
     /// silently reassigning to a different device.
     private(set) var connectionState: DeviceConnectionState = .stopped
 
+    /// Drives the "CAPTURE UNAVAILABLE" indicator (closed the last piece of
+    /// CLAUDE.md's former known gap: the watchdog's exponential backoff
+    /// against a wedged coreaudiod used to look like a silently frozen app).
+    /// True once a stall has survived the watchdog's first restart attempt
+    /// (~9s in) -- one transient stall that the first restart cures never
+    /// shows it, since flashing a scary indicator for a self-healing blip
+    /// is noise. Cleared by the next real hop (receive(_:)) or by Stop.
+    /// Only meaningful while `isCaptureActive`; the UI gates on both.
+    private(set) var isCaptureStalled = false
+
     var isCaptureActive: Bool {
         if case .running = connectionState { return true }
         return false
@@ -437,6 +447,7 @@ final class AudioPipelineViewModel {
     func stop() {
         stopGeneration += 1
         haltPublishing()
+        isCaptureStalled = false
         connectionState = connectionState.stopping()
         // The engine's own stop makes blocking HAL calls -- queued off the
         // main actor (see pendingCaptureOperation), while the state changes
@@ -577,6 +588,12 @@ final class AudioPipelineViewModel {
                 guard let deviceID = self.selectedInputDeviceID else { continue }
                 diagLog.notice("Watchdog: no hop in \(timeout, privacy: .public)s, restarting capture at device=\(deviceID, privacy: .public) (attempt \(self.stallRestartCount + 1, privacy: .public))")
                 self.stallRestartCount += 1
+                // The first restart attempt is given a chance to cure the
+                // stall silently; from the second on, the stall is
+                // persistent and the tech should see why nothing updates.
+                if self.stallRestartCount >= 2 {
+                    self.isCaptureStalled = true
+                }
                 self.startCapture(deviceID: deviceID, persistChoice: false)
             }
         }
@@ -589,6 +606,7 @@ final class AudioPipelineViewModel {
     private func receive(_ result: AnalysisResult) {
         lastHopAt = Date()
         stallRestartCount = 0
+        isCaptureStalled = false
         guard let toPublish = freezeGate.receive(result) else { return }
         apply(toPublish)
     }

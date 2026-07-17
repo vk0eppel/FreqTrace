@@ -73,8 +73,16 @@ struct ControlsRowView: View {
             if case .disconnected = trackedFrequencyViewModel.connectionState { return true }
             return false
         }()
+        // "CAPTURE UNAVAILABLE" (see AudioPipelineViewModel.isCaptureStalled):
+        // capture is supposed to be running but the audio stack has stopped
+        // delivering and the first watchdog restart didn't cure it --
+        // distinct from DISCONNECTED (device gone from the system), which
+        // takes priority since it's the more specific diagnosis. Same red
+        // treatment as DISCONNECTED: both mean "this reading is dead."
+        let isStalled = trackedFrequencyViewModel.isCaptureActive
+            && trackedFrequencyViewModel.isCaptureStalled
         return HStack(spacing: 6) {
-            LEDIndicator(isLit: true, color: isDisconnected ? theme.danger : nil)
+            LEDIndicator(isLit: true, color: isDisconnected || isStalled ? theme.danger : nil)
             Text("INPUT")
                 .font(.system(size: Typography.controlSize, weight: .medium))
                 .foregroundStyle(theme.textDim)
@@ -105,6 +113,10 @@ struct ControlsRowView: View {
 
             if isDisconnected {
                 Text("DISCONNECTED")
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(theme.danger)
+            } else if isStalled {
+                Text("CAPTURE UNAVAILABLE")
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(theme.danger)
             }
