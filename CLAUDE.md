@@ -20,6 +20,8 @@ xcodebuild -project FreqTrace.xcodeproj -scheme FreqTrace -destination 'platform
 xcodebuild -project FreqTrace.xcodeproj -scheme FreqTrace -destination 'platform=macOS' test
 ```
 
+Releasing is manual (no CI) — see [docs/release.md](./docs/release.md); note the dev-signed/un-notarized Gatekeeper caveat there.
+
 ## Product
 
 Target user: live sound techs at FOH during soundcheck/show — not measurement engineers (that's Smaart's audience). Differentiator is "opens up and just works," not analysis depth. Usable one-handed, mid-show, readable from a distance in dim lighting (dark bg, saturated color map like viridis/magma, large numerics).
