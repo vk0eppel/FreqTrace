@@ -72,6 +72,9 @@ struct WaterfallZoneView: View {
                 frequencyAxisLabels
                 dbAxisLabels
             }
+            if pipeline.latestMagnitudes.isEmpty {
+                emptyStateOverlay
+            }
             hoverOverlay
             displayModeToggle
             bandingResolutionControl
@@ -276,6 +279,71 @@ struct WaterfallZoneView: View {
                 )
         }
         .buttonStyle(.plain)
+    }
+
+    // Empty-state affordance (ticket #22): with no data yet (stopped at
+    // launch, or after Stop) the graph is otherwise an inert black void. A
+    // quiet centered prompt invites the tech to act, over a thin static
+    // strip of the waterfall's own color ramp so the app's identity shows
+    // before data flows. Keyed on latestMagnitudes.isEmpty, so it's gone the
+    // instant the first frame arrives and never overlaps live data; a frozen
+    // display keeps its last frame (non-empty) so freezing never shows it.
+    // Non-interactive, so it doesn't block the toggles or hover.
+    private var emptyStateOverlay: some View {
+        VStack(spacing: 14) {
+            spectralStrip
+                .frame(width: 220, height: 6)
+                .clipShape(Capsule())
+                .opacity(0.85)
+            // Names both ways to start: the Start control and the spacebar
+            // shortcut (KeyboardShortcuts: space = Start/Stop), so the
+            // shortcut is discoverable from the empty state itself.
+            HStack(spacing: 6) {
+                Text("Press Start or")
+                keycap("Space")
+                Text("to measure")
+            }
+            .font(.system(size: Typography.controlSize, weight: .medium))
+            .foregroundStyle(theme.textDim)
+        }
+        .allowsHitTesting(false)
+    }
+
+    // A small keyboard-hint cap, styled like the Controls row's console
+    // plates (raised fill, hairline border) so it reads as a key, not a
+    // button.
+    private func keycap(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: Typography.controlSize - 1, weight: .medium, design: .monospaced))
+            .foregroundStyle(theme.text)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4)
+                    .fill(theme.surfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 4)
+                            .strokeBorder(theme.border, lineWidth: 1)
+                    )
+            )
+    }
+
+    // The waterfall's own magnitude ramp (WaterfallColorMap, the single
+    // source of truth the Metal shader mirrors) rendered as a horizontal
+    // gradient -- theme-aware, matching whichever ramp the live waterfall
+    // would use.
+    private var spectralStrip: some View {
+        let stops = theme.mode == .light ? WaterfallColorMap.light : WaterfallColorMap.dark
+        return LinearGradient(
+            stops: stops.map { stop in
+                Gradient.Stop(
+                    color: Color(.sRGB, red: Double(stop.rgb.x), green: Double(stop.rgb.y), blue: Double(stop.rgb.z)),
+                    location: CGFloat(stop.position)
+                )
+            },
+            startPoint: .leading,
+            endPoint: .trailing
+        )
     }
 
     // Axis legibility (user report: "not visible enough"): each label now

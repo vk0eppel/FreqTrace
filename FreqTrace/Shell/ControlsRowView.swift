@@ -94,8 +94,9 @@ struct ControlsRowView: View {
                     }
                 }
             } label: {
-                Text(selectedInputDeviceName)
+                Text(inputDeviceLabel.text)
                     .font(.system(size: Typography.controlSize, weight: .medium))
+                    .foregroundStyle(inputDeviceLabel.color)
                     .lineLimit(1)
             }
             .fixedSize()
@@ -134,12 +135,16 @@ struct ControlsRowView: View {
         .consolePlate()
     }
 
-    private var selectedInputDeviceName: String {
-        guard let id = trackedFrequencyViewModel.selectedInputDeviceID,
-              let device = trackedFrequencyViewModel.availableInputDevices.first(where: { $0.id == id }) else {
-            return "No Input Device"
+    // Input Device plate label (ticket #23): while stopped, previews the
+    // device a Start would capture from (dimmed) instead of the old alarming
+    // "No Input Device"; only a genuine no-device / disconnected state shows
+    // the honest empty message. See InputDevicePlateLabel.
+    private var inputDeviceLabel: (text: String, color: Color) {
+        switch trackedFrequencyViewModel.inputDevicePlateLabel {
+        case .active(let name): return (name, theme.text)
+        case .preview(let name): return (name, theme.textDim)
+        case .unavailable: return ("No input device", theme.textFaint)
         }
-        return device.name
     }
 
     // The Output Device control (ticket #14, CONTEXT.md "Output Device"):

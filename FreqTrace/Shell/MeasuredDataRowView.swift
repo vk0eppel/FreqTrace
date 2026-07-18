@@ -52,7 +52,11 @@ struct MeasuredDataRowView: View {
         HStack(alignment: .top, spacing: 12) {
             dataBlock(label: "TRACKED FREQUENCY") {
                 VStack(alignment: .leading, spacing: 2) {
-                    heroValue(trackedFrequencyViewModel.formattedFrequency)
+                    readingValue(
+                        trackedFrequencyViewModel.trackedFrequencyReading,
+                        numberSize: Typography.heroSize,
+                        referenceNumber: "24000"
+                    )
                     fixedHeight(reference: peakLabelReference) {
                         if let peak = trackedFrequencyViewModel.formattedTrackedFrequencyLevelPeak {
                             peakLabel(peak)
@@ -74,14 +78,11 @@ struct MeasuredDataRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             dataBlock(label: "SPL") {
                 VStack(alignment: .leading, spacing: 4) {
-                    fixedWidth(
-                        reference: "-100 dB",
-                        font: .system(size: Typography.secondarySize, weight: .semibold, design: .monospaced)
-                    ) {
-                        Text(trackedFrequencyViewModel.formattedSPL)
-                            .font(.system(size: Typography.secondarySize, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(trackedFrequencyViewModel.splDb == nil ? theme.textFaint : theme.text)
-                    }
+                    readingValue(
+                        trackedFrequencyViewModel.splReading,
+                        numberSize: Typography.secondarySize,
+                        referenceNumber: "-100"
+                    )
                     fixedHeight(reference: peakLabelReference) {
                         if let peak = trackedFrequencyViewModel.formattedSPLPeak {
                             peakLabel(peak)
@@ -211,32 +212,38 @@ struct MeasuredDataRowView: View {
         .meterPanel()
     }
 
-    private func heroValue(_ text: String) -> some View {
-        // "24000 Hz" (5 digits) covers Nyquist at the default 48kHz config
-        // -- Tracked Frequency can never exceed sampleRate/2 (see
-        // FrequencyTracker.bestWeightedBin's nyquist guard).
-        fixedWidth(
-            reference: "24000 Hz",
-            font: .system(size: Typography.heroSize, weight: .semibold, design: .monospaced)
-        ) {
-            Text(text)
-                .font(.system(size: Typography.heroSize, weight: .semibold, design: .monospaced))
-                .foregroundStyle(trackedFrequencyViewModel.trackedFrequencyHz == nil ? theme.textFaint : theme.text)
-        }
-    }
+    /// A hero/secondary numeric readout: the number big and bright, the unit
+    /// smaller and dimmed so the digits read first from a distance (ticket
+    /// #24), with a unit-bearing "— Hz"/"— dB" placeholder in the empty state
+    /// (ticket #22). `referenceNumber` is the widest plausible number (e.g.
+    /// "24000" covers Nyquist at 48kHz, "-100" the SPL range) -- rendered
+    /// invisibly with the same unit to reserve layout width, so a shorter
+    /// live value never shifts anything after it and the unit stays anchored
+    /// on the right, only the leading digits shifting (user reports: "space
+    /// is moving when the frequency changes" / "the Hz part is moving").
+    private func readingValue(_ reading: MeasuredReading, numberSize: CGFloat, referenceNumber: String) -> some View {
+        // Unit ~0.42x the number and baseline-aligned -- large enough to read,
+        // small enough that the digits clearly dominate.
+        let unitSize = (numberSize * 0.42).rounded()
+        let numberFont = Font.system(size: numberSize, weight: .semibold, design: .monospaced)
+        let unitFont = Font.system(size: unitSize, weight: .medium, design: .monospaced)
+        let spacing = unitSize * 0.3
 
-    /// Reserves layout width for the widest plausible value (`reference`,
-    /// rendered invisibly at `font`) so a shorter live value never shifts
-    /// anything positioned after this block (user report: "space is
-    /// moving when the frequency changes") -- `content` overlays on top,
-    /// trailing-aligned, at its own natural width, so the unit suffix
-    /// ("Hz"/"dB") stays anchored in place and only the leading digits
-    /// shift as their count changes (user report: "the Hz part is moving").
-    private func fixedWidth(reference: String, font: Font, @ViewBuilder content: () -> some View) -> some View {
-        Text(reference)
-            .font(font)
-            .hidden()
-            .overlay(alignment: .trailing) { content() }
+        return HStack(alignment: .firstTextBaseline, spacing: spacing) {
+            Text(referenceNumber).font(numberFont)
+            Text(reading.unit).font(unitFont)
+        }
+        .hidden()
+        .overlay(alignment: .trailing) {
+            HStack(alignment: .firstTextBaseline, spacing: spacing) {
+                Text(reading.number)
+                    .font(numberFont)
+                    .foregroundStyle(reading.hasValue ? theme.text : theme.textFaint)
+                Text(reading.unit)
+                    .font(unitFont)
+                    .foregroundStyle(theme.textDim)
+            }
+        }
     }
 }
 

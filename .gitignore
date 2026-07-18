@@ -3,6 +3,8 @@ xcuserdata/
 DerivedData/
 *.xcuserstate
 .build/
+# Local release/build output (docs/release.md uses -derivedDataPath build/)
+build/
 
 # Agent worktree scratch state
 .claude/

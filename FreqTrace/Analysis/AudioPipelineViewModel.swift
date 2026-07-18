@@ -805,21 +805,32 @@ final class AudioPipelineViewModel {
         anomalyCandidates = []
     }
 
-    /// "2340 Hz"-style formatting for the Measured Data row's hero number,
-    /// or an em dash placeholder before capture produces a first result.
-    /// Whole Hz, not fractional -- finer than the FFT's own bin resolution
-    /// (~12Hz at the default config) would be false precision.
-    var formattedFrequency: String {
-        guard let hz = trackedFrequencyHz else { return "\u{2014}" }
-        return String(format: "%.0f Hz", hz)
+    /// Tracked Frequency hero readout, split into number + unit so the row
+    /// can style them separately (ticket #24) and show a unit-bearing "— Hz"
+    /// placeholder before capture produces a first result (ticket #22). See
+    /// MeasuredReading.
+    var trackedFrequencyReading: MeasuredReading {
+        .frequency(hz: trackedFrequencyHz)
     }
 
-    /// "86 dB"-style formatting for the SPL block, including the manual
-    /// offset -- displayed = raw dBFS + offset (ticket #6), or an em dash
-    /// placeholder before capture produces a first result.
-    var formattedSPL: String {
-        guard let splDb, splDb.isFinite else { return "\u{2014}" }
-        return "\(Int((splDb + splOffsetDb).rounded())) dB"
+    /// SPL readout (raw dBFS + manual offset, ticket #6), same number/unit
+    /// split and empty-state placeholder as the Tracked Frequency hero.
+    var splReading: MeasuredReading {
+        .spl(db: splDb, offset: splOffsetDb)
+    }
+
+    /// What the Input Device plate should display (ticket #23): the running
+    /// device (active), the device a Start would use while stopped (preview,
+    /// shown dimmed), or none. See InputDevicePlateLabel for why the
+    /// resolved-default fallback can't leak a silent fallback while
+    /// disconnected.
+    var inputDevicePlateLabel: InputDevicePlateLabel {
+        InputDevicePlateLabel.resolve(
+            isCapturing: isCaptureActive,
+            selectedDeviceID: selectedInputDeviceID,
+            resolvedDefaultID: resolveDefaultDeviceID(),
+            availableDevices: availableInputDevices
+        )
     }
 
     /// "PEAK -12dB"-style secondary readout (ticket #12, CONTEXT.md

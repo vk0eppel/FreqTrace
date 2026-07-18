@@ -138,3 +138,61 @@ struct DeviceConnectionStateTests {
         #expect(DeviceConnectionState.disconnected(deviceID: "usb-interface").pickStartsCapture == true)
     }
 }
+
+// Exercises the Input Device plate label (ticket #23): the stopped state
+// must preview the device a Start would use rather than showing an alarming
+// "No Input Device", without silently previewing a fallback when the
+// selected device has disconnected.
+struct InputDevicePlateLabelTests {
+    private let mic = AudioDevice(id: "built-in-mic", name: "MacBook Pro Microphone")
+    private let usb = AudioDevice(id: "usb-interface", name: "Scarlett 2i2")
+
+    @Test func runningShowsSelectedDeviceAsActive() {
+        let label = InputDevicePlateLabel.resolve(
+            isCapturing: true, selectedDeviceID: usb.id,
+            resolvedDefaultID: mic.id, availableDevices: [mic, usb]
+        )
+        #expect(label == .active(name: usb.name))
+    }
+
+    @Test func stoppedWithNoSelectionPreviewsResolvedDefault() {
+        // Fresh launch: nothing explicitly selected, so the plate previews
+        // the device the next Start would capture from (the mic), dimmed --
+        // never "No Input Device" while a mic is available.
+        let label = InputDevicePlateLabel.resolve(
+            isCapturing: false, selectedDeviceID: nil,
+            resolvedDefaultID: mic.id, availableDevices: [mic, usb]
+        )
+        #expect(label == .preview(name: mic.name))
+    }
+
+    @Test func stoppedWithSelectionPreviewsSelectedDevice() {
+        // Picked-while-stopped (#17) or stopped-after-running: the explicit
+        // choice wins over the resolved default.
+        let label = InputDevicePlateLabel.resolve(
+            isCapturing: false, selectedDeviceID: usb.id,
+            resolvedDefaultID: mic.id, availableDevices: [mic, usb]
+        )
+        #expect(label == .preview(name: usb.name))
+    }
+
+    @Test func disconnectedSelectionDoesNotPreviewAFallback() {
+        // The selected device has disconnected (still selected, ADR 0006 =
+        // no silent fallback). It's not in availableDevices, and because a
+        // device *is* selected the resolved-default fallback must not fire --
+        // resolve to .none, matching the honest DISCONNECTED reading.
+        let label = InputDevicePlateLabel.resolve(
+            isCapturing: false, selectedDeviceID: usb.id,
+            resolvedDefaultID: mic.id, availableDevices: [mic]
+        )
+        #expect(label == .unavailable)
+    }
+
+    @Test func noDevicesAtAllResolvesToUnavailable() {
+        let label = InputDevicePlateLabel.resolve(
+            isCapturing: false, selectedDeviceID: nil,
+            resolvedDefaultID: nil, availableDevices: []
+        )
+        #expect(label == .unavailable)
+    }
+}

@@ -41,6 +41,42 @@ nonisolated struct AudioDeviceFormat: Equatable, Sendable {
     }
 }
 
+/// What the Input Device plate should display (ticket #23). The old label
+/// showed `No Input Device` whenever nothing was explicitly selected, even
+/// though a mic was available and would be used on the next Start -- it read
+/// as an error. This distinguishes three states so the plate can preview the
+/// device a Start would actually capture from, dimmed, instead of alarming.
+///
+/// The resolved-default fallback only applies when *nothing* is selected
+/// (the fresh-launch stopped state). A disconnected device is still selected
+/// (ADR 0006: no silent fallback), so `selectedDeviceID` is non-nil and the
+/// fallback never fires -- resolve returns `.none`, matching the honest
+/// "device is gone" reading the DISCONNECTED indicator already shows.
+nonisolated enum InputDevicePlateLabel: Equatable {
+    /// Capture is running from this device.
+    case active(name: String)
+    /// Stopped, but this is the device the next Start would capture from --
+    /// shown dimmed to signal it isn't running yet.
+    case preview(name: String)
+    /// No input device resolves at all (genuinely none available, or the
+    /// selected one has disconnected). Named `unavailable`, not `none`, to
+    /// avoid shadowing `Optional.none` at call sites.
+    case unavailable
+
+    static func resolve(
+        isCapturing: Bool,
+        selectedDeviceID: String?,
+        resolvedDefaultID: String?,
+        availableDevices: [AudioDevice]
+    ) -> InputDevicePlateLabel {
+        let id = selectedDeviceID ?? resolvedDefaultID
+        guard let id, let device = availableDevices.first(where: { $0.id == id }) else {
+            return .unavailable
+        }
+        return isCapturing ? .active(name: device.name) : .preview(name: device.name)
+    }
+}
+
 /// Pure decision logic for which device should be active: given the
 /// currently available devices, a persisted last explicit choice, and the
 /// system default, decides which device ID to use. Independent of real Core
