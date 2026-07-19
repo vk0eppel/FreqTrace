@@ -25,12 +25,32 @@
 import AppKit
 
 enum KeyboardShortcuts {
+    /// Named keys for shortcuts whose typed "character" is a non-printing
+    /// function-key scalar rather than a writable string literal (the arrow
+    /// keys, used for the Signal Generator's frequency/level -- user
+    /// request). Matched by character like every other shortcut, so they
+    /// stay layout-independent.
+    static let leftArrow = String(UnicodeScalar(NSLeftArrowFunctionKey)!)
+    static let rightArrow = String(UnicodeScalar(NSRightArrowFunctionKey)!)
+    static let upArrow = String(UnicodeScalar(NSUpArrowFunctionKey)!)
+    static let downArrow = String(UnicodeScalar(NSDownArrowFunctionKey)!)
+
+    /// Modifiers whose presence means "this is a chord, not a plain-key
+    /// shortcut" -- so it passes through untouched (Cmd+W still closes the
+    /// window, Shift/Cmd+arrow reach the system). Deliberately NOT the full
+    /// `.deviceIndependentFlagsMask`: the arrow keys always report
+    /// `.function` + `.numericPad`, which are in that mask, so checking it
+    /// would treat every arrow as modified and none of the arrow shortcuts
+    /// would ever fire. Caps Lock is likewise excluded, so shortcuts keep
+    /// working with it on.
+    private static let chordModifiers: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+
     /// Installs a local keyDown monitor firing `actions[key]` for plain
     /// (unmodified) keypresses. Returns the monitor token; the caller owns
     /// it and must pass it to `remove(_:)` when its view disappears.
     static func install(_ actions: [String: @MainActor () -> Void]) -> Any? {
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).isEmpty,
+            guard event.modifierFlags.intersection(chordModifiers).isEmpty,
                   let key = event.charactersIgnoringModifiers?.lowercased(),
                   let action = actions[key] else {
                 return event

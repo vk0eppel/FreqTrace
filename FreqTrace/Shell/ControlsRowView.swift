@@ -19,6 +19,15 @@ struct ControlsRowView: View {
     @Environment(\.theme) private var theme
     @Environment(AudioPipelineViewModel.self) private var trackedFrequencyViewModel
     @State private var signalGenerator = SignalGeneratorEngine()
+    /// Signal Generator keyboard shortcuts (user request): left/right arrows
+    /// step the sine frequency (ISO Band down/up), up/down arrows nudge the
+    /// output level +/-1 dB. Registered here rather than in AppShellView's
+    /// monitor because the generator engine is this view's own state;
+    /// KeyboardShortcuts supplies the shared guards (a focused text field
+    /// wins -- so arrows edit the Level/Hz/Offset fields normally while one
+    /// is being typed into -- and real chords pass through), same as the
+    /// space/w/r shortcuts.
+    @State private var generatorShortcutMonitor: Any?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -29,6 +38,26 @@ struct ControlsRowView: View {
             line2
         }
         .background(theme.surfaceRaised)
+        .onAppear {
+            guard generatorShortcutMonitor == nil else { return }
+            generatorShortcutMonitor = KeyboardShortcuts.install([
+                // Frequency stepping is meaningful only for the sine waveform
+                // (the UI hides the frequency control for pink/white noise) --
+                // arrows are a no-op there, matching the hidden control.
+                KeyboardShortcuts.leftArrow: {
+                    if signalGenerator.waveform == .sine { signalGenerator.stepSineFrequencyDown() }
+                },
+                KeyboardShortcuts.rightArrow: {
+                    if signalGenerator.waveform == .sine { signalGenerator.stepSineFrequencyUp() }
+                },
+                KeyboardShortcuts.upArrow: { signalGenerator.stepLevelUp() },
+                KeyboardShortcuts.downArrow: { signalGenerator.stepLevelDown() },
+            ])
+        }
+        .onDisappear {
+            KeyboardShortcuts.remove(generatorShortcutMonitor)
+            generatorShortcutMonitor = nil
+        }
     }
 
     private var line1: some View {
