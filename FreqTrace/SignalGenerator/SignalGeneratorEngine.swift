@@ -114,7 +114,12 @@ final class SignalGeneratorEngine {
         renderState = SignalGeneratorRenderState(sampleRate: effectiveSampleRate)
 
         let format = AVAudioFormat(standardFormatWithSampleRate: effectiveSampleRate, channels: 1)!
-        let sourceNode = AVAudioSourceNode(format: format) { [renderState] isSilence, timestamp, frameCount, audioBufferList in
+        // @Sendable pins the render block as nonisolated: it's formed here in
+        // SignalGeneratorEngine's @MainActor context, so without it the closure
+        // is inferred @MainActor and CoreAudio calling it on the real-time audio
+        // thread trips Swift 6's runtime executor check (dispatch_assert_queue),
+        // crashing the app the moment the generator is switched on.
+        let sourceNode = AVAudioSourceNode(format: format) { @Sendable [renderState] isSilence, timestamp, frameCount, audioBufferList in
             renderState.render(
                 isSilence: isSilence,
                 timestamp: timestamp,

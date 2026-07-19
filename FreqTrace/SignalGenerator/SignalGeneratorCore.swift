@@ -62,7 +62,12 @@ nonisolated struct SignalGeneratorCore<RNG: RandomNumberGenerator> {
     }
 }
 
-extension SignalGeneratorCore where RNG == SystemRandomNumberGenerator {
+// nonisolated: an extension is a separate declaration scope, so it takes the
+// module default @MainActor again even though the primary `struct` above is
+// nonisolated -- without this the convenience init is main-actor-isolated and
+// can't be called from SignalGeneratorRenderState's nonisolated init (which
+// runs the render state off the main actor for the audio thread).
+nonisolated extension SignalGeneratorCore where RNG == SystemRandomNumberGenerator {
     init(sampleRate: Double, sineFrequency: Double = SignalGeneratorCore.defaultSineFrequency) {
         self.init(sampleRate: sampleRate, rng: SystemRandomNumberGenerator(), sineFrequency: sineFrequency)
     }

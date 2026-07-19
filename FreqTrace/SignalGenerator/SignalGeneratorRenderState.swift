@@ -19,7 +19,13 @@
 import AVFoundation
 import os
 
-final class SignalGeneratorRenderState: @unchecked Sendable {
+// nonisolated: opts out of the module's default @MainActor isolation
+// (SWIFT_DEFAULT_ACTOR_ISOLATION). Its `render` method runs on the
+// real-time audio thread via the AVAudioSourceNode block -- without this,
+// the method is implicitly @MainActor and Swift 6's runtime executor check
+// traps (dispatch_assert_queue) the instant the audio thread calls it,
+// crashing the app the moment the Signal Generator is switched on.
+nonisolated final class SignalGeneratorRenderState: @unchecked Sendable {
     private struct Snapshot {
         var waveform: Waveform
         var amplitude: Double
