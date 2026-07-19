@@ -59,6 +59,22 @@ final class SignalGeneratorEngine {
         didSet { syncRenderState() }
     }
 
+    /// One up/down-arrow keystroke's level change (user request: arrows nudge
+    /// the output level by 1 dB) -- a whole dB, matching how a tech reads
+    /// levels off a console rather than a finer sub-dB step.
+    static let levelStepDB: Double = 1
+
+    /// Nudge the output level by one `levelStepDB`, clamped to `levelRangeDB`
+    /// (the same bounds the numeric Level field enforces). Drive by the
+    /// up/down-arrow shortcuts.
+    func stepLevelUp() {
+        levelDB = min(levelDB + Self.levelStepDB, Self.levelRangeDB.upperBound)
+    }
+
+    func stepLevelDown() {
+        levelDB = max(levelDB - Self.levelStepDB, Self.levelRangeDB.lowerBound)
+    }
+
     /// The sine waveform's frequency (ticket #14, CONTEXT.md "ISO Band"):
     /// set via the ISO Band step buttons or the free numeric Hz field.
     /// Meaningless for pink/white noise -- the UI disables/hides the
