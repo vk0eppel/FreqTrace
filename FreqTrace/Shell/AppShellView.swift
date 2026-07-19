@@ -48,6 +48,10 @@ struct AppShellView: View {
     /// click anywhere else just leaves it resigned. No need to compute any
     /// field's frame or special-case which control was clicked.
     @State private var clickAwayMonitor: Any?
+    /// One-shot observer that clears AppKit's unwanted launch focus on the
+    /// SPL Offset field (see `installInitialFocusReset`). Held so it can be
+    /// torn down if it never fires.
+    @State private var didBecomeKeyObserver: Any?
 
     private var theme: Theme { Theme(mode: appearanceSettings.mode) }
 
@@ -65,11 +69,12 @@ struct AppShellView: View {
         .onAppear {
             installSpacebarShortcut()
             installClickAwayReset()
-            resignInitialTextFieldFocus()
+            installInitialFocusReset()
         }
         .onDisappear {
             removeSpacebarShortcut()
             removeClickAwayReset()
+            removeInitialFocusReset()
         }
     }
 
@@ -82,14 +87,63 @@ struct AppShellView: View {
     // capture. Explicitly resigning first responder removes that unwanted
     // default focus outright, rather than trying to out-race it (see
     // spacebarMonitor's doc comment on why racing SwiftUI's own
-    // @FocusState against it didn't work) -- dispatched to the next run
-    // loop turn so it runs *after* AppKit's own initial-responder
-    // assignment on window-did-become-key, which can happen after this
-    // onAppear fires.
-    private func resignInitialTextFieldFocus() {
-        DispatchQueue.main.async {
-            NSApp.keyWindow?.makeFirstResponder(nil)
+    // @FocusState against it didn't work).
+    //
+    // Priority-inversion fix (Thread Performance Checker: "User-interactive
+    // thread waiting on a lower QoS Default thread"): the resign used to run
+    // from a bare `DispatchQueue.main.async` inside onAppear, i.e. on the
+    // *cold-launch critical path*. There, makeFirstResponder synchronously
+    // drives AppKit's text-input machinery (NSTextInputContext / input-method
+    // services) as it warms up on a Default-QoS thread, so the main
+    // (user-interactive) thread blocks on lower-QoS work. Triggering off
+    // `didBecomeKey` instead means the window is fully key and the field
+    // editor's text-input context is already warm, so resigning it is a
+    // teardown that doesn't block on cold input-method init. Still dispatched
+    // one run-loop turn later so it runs *after* AppKit's own
+    // initial-responder assignment (which happens as the window becomes key).
+    // One-shot: it removes itself after the first fire so a later app
+    // reactivation (Cmd-Tab back) never steals focus from a field the tech is
+    // actively editing. Guarded to only act when a text field actually holds
+    // focus (same guard as clickAwayMonitor), so it's a no-op if nothing did.
+    private func installInitialFocusReset() {
+        guard didBecomeKeyObserver == nil else { return }
+        var token: Any?
+        // Deferred + guarded resign, one-shot: removes the observer the first
+        // time it runs so a later app reactivation can't fire it. Guarding on
+        // NSTextView means it only touches the responder chain once a field
+        // actually holds focus -- so it never resigns cold (avoiding the
+        // Default-QoS text-input init the inversion came from).
+        let reset: () -> Void = {
+            DispatchQueue.main.async {
+                if let window = NSApp.keyWindow, window.firstResponder is NSTextView {
+                    window.makeFirstResponder(nil)
+                }
+            }
+            if let token {
+                NotificationCenter.default.removeObserver(token)
+            }
         }
+        token = NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification,
+            object: nil,
+            queue: .main
+        ) { _ in reset() }
+        didBecomeKeyObserver = token
+        // Cover the race where the window already became key before this
+        // observer registered (onAppear can run after window-did-become-key,
+        // so the notification would already be missed): if it's key now, run
+        // the same guarded resign directly. `reset()` then tears the observer
+        // down, so it won't fire on a future Cmd-Tab return.
+        if NSApp.keyWindow != nil {
+            reset()
+        }
+    }
+
+    private func removeInitialFocusReset() {
+        if let didBecomeKeyObserver {
+            NotificationCenter.default.removeObserver(didBecomeKeyObserver)
+        }
+        didBecomeKeyObserver = nil
     }
 
     private func installSpacebarShortcut() {
