@@ -41,13 +41,73 @@
 
 import AVFoundation
 import CoreAudio
+import Synchronization
+import os
+
+/// The capture-engine surface `AudioPipelineViewModel` depends on, extracted
+/// so the preemptive-recovery orchestration (abandon a wedged engine, rebuild
+/// a fresh one) can be driven by a fake in tests -- the raw synchronous HAL
+/// call inside `start()` stays hardware-only, but the recovery *logic* around
+/// it is now lockable down without a mic. `Sendable` because the concrete
+/// conformer is an `actor` handed across the main actor / task boundary.
+protocol CaptureEngine: Sendable {
+    /// Starts capture (optionally routed at a Core Audio device); returns the
+    /// hardware's actual input sample rate.
+    @discardableResult
+    func start(deviceID: AudioDeviceID?) async throws -> Double
+    func stop() async
+    var engineIsRunning: Bool { get async }
+    func setConfigurationChangeHandler(_ handler: @escaping @Sendable () -> Void) async
+    /// Permanently silences this engine's capture tap, synchronously and
+    /// without touching the (possibly wedged) engine actor -- see
+    /// `CaptureGate`. Used to abandon an engine whose `start()` has blocked on
+    /// coreaudiod, so a freshly-built replacement is the only writer into the
+    /// shared ring buffer.
+    nonisolated func deactivate()
+}
+
+/// A one-way on→off flag gating a capture tap's writes into the ring buffer.
+/// The `AudioRingBuffer` is strict single-producer, so when we abandon a
+/// wedged engine and build a fresh one, the old engine's tap (which may still
+/// fire if its `start()` eventually unwedges) must be silenced *instantly* and
+/// *without* coordinating with the stuck actor. An atomic read on the RT audio
+/// thread + an atomic store from any thread does exactly that: flip it false
+/// and the old tap becomes a no-op forever, leaving the new engine's tap the
+/// sole producer. Reference type so the tap closure and the owning actor share
+/// one flag.
+nonisolated final class CaptureGate: Sendable {
+    private let active = Atomic<Bool>(true)
+    var isActive: Bool { active.load(ordering: .relaxed) }
+    func deactivate() { active.store(false, ordering: .relaxed) }
+}
+
+// [DIAG-cap] Temporary start-path timing instrumentation (diagnosing
+// intermittent slow/hung capture starts). Each HAL call below is a separate
+// synchronous coreaudiod IPC, so they're timed individually to attribute a
+// slow start to the exact call. Remove when the diagnosis is complete
+// (grep "[DIAG-cap]").
+nonisolated private let diagCap = Logger(subsystem: "com.freqtrace.diagnostic", category: "capture")
+
+// [DIAG-cap] Milliseconds (rounded) from a Duration, for readable timing logs.
+nonisolated extension Duration {
+    var ms: Int {
+        let (secs, attos) = components
+        return Int((Double(secs) * 1000) + (Double(attos) / 1_000_000_000_000_000))
+    }
+}
 
 enum MicrophoneCaptureError: Error {
     case engineStartFailed(any Error)
     case deviceRoutingFailed(OSStatus)
 }
 
-actor MicrophoneCaptureEngine {
+actor MicrophoneCaptureEngine: CaptureEngine {
+    /// Gates this engine's tap writes (see `CaptureGate`). One per engine
+    /// instance, created at init and shared with every tap this instance
+    /// installs; `deactivate()` flips it off when the owner abandons this
+    /// engine. nonisolated so the RT tap thread and `deactivate()` reach it
+    /// without the actor.
+    nonisolated let gate = CaptureGate()
     /// var, not let (bug fix -- diagnosed via log instrumentation, user
     /// report: switching FFT size repeatedly eventually left capture
     /// silently dead -- AudioRingBuffer.write's writeIndex simply stopped
@@ -101,13 +161,20 @@ actor MicrophoneCaptureEngine {
     @discardableResult
     func start(deviceID: AudioDeviceID? = nil) throws -> Double {
         if isRunning, let sampleRate { return sampleRate }
+        let clock = ContinuousClock()
+        let t0 = clock.now
         engine = AVAudioEngine()
+        diagCap.notice("[DIAG-cap] engine alloc took \(t0.duration(to: clock.now).ms, privacy: .public)ms")
 
         if let deviceID {
+            let tRoute = clock.now
             try route(to: deviceID)
+            diagCap.notice("[DIAG-cap] route(to:) took \(tRoute.duration(to: clock.now).ms, privacy: .public)ms")
         }
 
+        let tInput = clock.now
         let input = engine.inputNode
+        diagCap.notice("[DIAG-cap] inputNode took \(tInput.duration(to: clock.now).ms, privacy: .public)ms")
         // inputFormat(forBus:), NOT outputFormat(forBus:) (bug fix -- user
         // report: "the waterfall/rta never starts right away" plus an
         // unrecoverable watchdog restart loop after changing the device's
@@ -122,18 +189,29 @@ actor MicrophoneCaptureEngine {
         // then restarted into the exact same stale format forever.
         // inputFormat(forBus:) is the hardware-side format and tracks the
         // device's real rate.
+        let tFormat = clock.now
         let format = input.inputFormat(forBus: 0)
+        diagCap.notice("[DIAG-cap] inputFormat took \(tFormat.duration(to: clock.now).ms, privacy: .public)ms (rate=\(format.sampleRate, privacy: .public))")
         sampleRate = format.sampleRate
 
         let ringBuffer = self.ringBuffer
+        let gate = self.gate
+        let tTap = clock.now
         input.installTap(onBus: 0, bufferSize: 2048, format: format) { buffer, _ in
             // Real-time audio thread: minimal work only.
+            // Gate first: if this engine has been abandoned (deactivate()),
+            // drop the buffer so a stale tap can't write into the ring buffer
+            // alongside the replacement engine (single-producer invariant).
+            guard gate.isActive else { return }
             guard let channelData = buffer.floatChannelData else { return }
             ringBuffer.write(channelData[0], count: Int(buffer.frameLength))
         }
+        diagCap.notice("[DIAG-cap] installTap took \(tTap.duration(to: clock.now).ms, privacy: .public)ms")
 
         do {
+            let tStart = clock.now
             try engine.start()
+            diagCap.notice("[DIAG-cap] engine.start() took \(tStart.duration(to: clock.now).ms, privacy: .public)ms")
         } catch {
             input.removeTap(onBus: 0)
             throw MicrophoneCaptureError.engineStartFailed(error)
@@ -178,6 +256,16 @@ actor MicrophoneCaptureEngine {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
+    }
+
+    /// Permanently silences this engine's tap (see `CaptureGate`) -- called
+    /// when the owner abandons this engine after `start()` wedged on
+    /// coreaudiod. nonisolated and synchronous: it must take effect instantly
+    /// even while the actor's executor is blocked inside that wedged call. A
+    /// best-effort `stop()` is still fired-and-forgotten separately for
+    /// whenever the actor eventually unwedges.
+    nonisolated func deactivate() {
+        gate.deactivate()
     }
 
     private func route(to deviceID: AudioDeviceID) throws {

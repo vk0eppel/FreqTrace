@@ -110,8 +110,12 @@ struct ControlsRowView: View {
         // treatment as DISCONNECTED: both mean "this reading is dead."
         let isStalled = trackedFrequencyViewModel.isCaptureActive
             && trackedFrequencyViewModel.isCaptureStalled
+        // "STARTING…" (amber, in-progress -- not a dead-reading red): shown
+        // while a Start attempt is between pressing Start and the first hop,
+        // so a slow coreaudiod start reads as "working on it," not a hang.
+        let isStarting = trackedFrequencyViewModel.isCaptureStarting
         return HStack(spacing: 6) {
-            LEDIndicator(isLit: true, color: isDisconnected || isStalled || trackedFrequencyViewModel.isMicAccessDenied ? theme.danger : nil)
+            LEDIndicator(isLit: true, color: isDisconnected || isStalled || trackedFrequencyViewModel.isMicAccessDenied ? theme.danger : (isStarting ? theme.warn : nil))
             Text("INPUT")
                 .font(.system(size: Typography.controlSize, weight: .medium))
                 .foregroundStyle(theme.textDim)
@@ -159,6 +163,12 @@ struct ControlsRowView: View {
                 Text("CAPTURE UNAVAILABLE")
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(theme.danger)
+            } else if isStarting {
+                // Below the three failure messages (a genuine failure mid-start
+                // should win), amber not red: this is in-progress, not dead.
+                Text("STARTING…")
+                    .font(.system(size: Typography.controlSize, weight: .semibold))
+                    .foregroundStyle(theme.warn)
             }
         }
         .consolePlate()

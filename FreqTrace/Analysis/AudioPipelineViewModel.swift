@@ -108,6 +108,16 @@ final class AudioPipelineViewModel {
     /// pointer at the fix.
     private(set) var isMicAccessDenied = false
 
+    /// Drives the amber "STARTING…" indicator (plate) and the empty-state
+    /// overlay's "Starting…" text: true from the moment a Start attempt begins
+    /// its engine work (after permission is granted -- a first-launch
+    /// permission prompt is the user's wait, not ours) until the first hop
+    /// arrives (`receive`) or the attempt fails/aborts/stops. Between Start and
+    /// the first hop the display would otherwise sit on the inert empty state,
+    /// so a slow coreaudiod start (the reported hang) is indistinguishable from
+    /// a dead app -- this makes "we're working on it" visible.
+    private(set) var isCaptureStarting = false
+
     var isCaptureActive: Bool {
         if case .running = connectionState { return true }
         return false
@@ -245,8 +255,17 @@ final class AudioPipelineViewModel {
 
     private func enqueueCaptureOperation(_ operation: @escaping @MainActor () async -> Void) {
         let previous = pendingCaptureOperation
+        // [DIAG-cap] Times how long this op waits on the prior op before it
+        // can run — measures the "recovery queued behind a wedged start()"
+        // amplifier (H5). A large wait means a restart couldn't preempt a
+        // still-blocked operation. Remove when the diagnosis is done.
+        let hadPrevious = previous != nil
+        let enqueuedAt = ContinuousClock.now
         pendingCaptureOperation = Task {
             await previous?.value
+            if hadPrevious {
+                diagLog.notice("[DIAG-cap] capture op waited \(enqueuedAt.duration(to: ContinuousClock.now).ms, privacy: .public)ms for prior op")
+            }
             await operation()
         }
     }
@@ -312,7 +331,17 @@ final class AudioPipelineViewModel {
     /// path. ringBuffer/captureEngine stay `let`: ring buffer capacity only
     /// depends on sampleRate, unaffected by window/hop size.
     private var pipeline: AudioAnalysisPipeline
-    private let captureEngine: MicrophoneCaptureEngine
+    /// var, not let (was let): preemptive recovery abandons a wedged engine
+    /// and swaps in a fresh one built by `captureEngineFactory`. `any
+    /// CaptureEngine` (not the concrete actor) so a fake can drive the
+    /// recovery orchestration in tests.
+    private var captureEngine: any CaptureEngine
+    /// Builds a fresh capture engine for the initial start and for each
+    /// preemptive-recovery rebuild. Injectable so tests can hand back a
+    /// scripted sequence of fakes (e.g. one that wedges, then one that
+    /// succeeds); the default builds a real `MicrophoneCaptureEngine` on the
+    /// shared ring buffer.
+    private let captureEngineFactory: @MainActor () -> any CaptureEngine
     private let deviceEnumerator = AudioDeviceEnumerator(scope: .input)
     private var streamTask: Task<Void, Never>?
     /// Self-healing watchdog (bug fix -- diagnosed via log instrumentation,
@@ -337,7 +366,24 @@ final class AudioPipelineViewModel {
     /// intentionally withholds published updates) is never mistaken for a
     /// stall.
     private var lastHopAt: Date?
+    /// [DIAG-cap] Temporary: measures latency from a successful engine start
+    /// to the first analysis hop, to tell "start() slow" apart from "start()
+    /// fast but no data flows." Remove when the diagnosis is done.
+    private var firstHopStartedAt: ContinuousClock.Instant?
+    private var awaitingFirstHop = false
     private static let stallTimeout: TimeInterval = 3
+    /// How long a single `captureEngine.start()` is given before it's judged
+    /// wedged on coreaudiod and abandoned (preemptive recovery). The healthy
+    /// path returns in ~115ms and first-hops in ~250ms (measured), so 2s is
+    /// far above normal jitter yet a fraction of the multi-second-to-forever
+    /// hang a wedged HAL call otherwise produces. Instance-level (not static)
+    /// so tests can inject a short deadline and run the recovery loop fast.
+    private let startDeadline: Duration
+    /// How many fresh engines to try before giving up and surfacing CAPTURE
+    /// UNAVAILABLE. Each attempt is a brand-new engine actor, so a transient
+    /// daemon wedge is almost always cleared by the first rebuild; this only
+    /// bounds a persistently-sick stack.
+    private static let maxStartAttempts = 3
     /// Consecutive watchdog restarts that have not yet produced a hop --
     /// drives exponential backoff (3s, 6s, 12s, 24s, 48s cap) so a capture
     /// stack that is *staying* broken isn't hammered with a full engine
@@ -351,8 +397,13 @@ final class AudioPipelineViewModel {
     /// launches (CONTEXT.md "Input Device").
     private static let persistedDeviceIDDefaultsKey = "FreqTrace.selectedInputDeviceID"
 
-    init(config: AnalysisConfig = .default) {
+    init(
+        config: AnalysisConfig = .default,
+        startDeadline: Duration = .seconds(2),
+        captureEngineFactory: (@MainActor (AudioRingBuffer) -> any CaptureEngine)? = nil
+    ) {
         self.config = config
+        self.startDeadline = startDeadline
         // Two seconds of headroom at the configured sample rate -- generous
         // relative to the ~43ms hop cadence (2048 samples @ 48kHz), so a
         // brief scheduling delay on the consumer actor doesn't drop samples.
@@ -360,7 +411,9 @@ final class AudioPipelineViewModel {
         let ringBuffer = AudioRingBuffer(capacity: ringBufferCapacity)
         self.ringBuffer = ringBuffer
         self.pipeline = AudioAnalysisPipeline(config: config, ringBuffer: ringBuffer, weighting: .default)
-        self.captureEngine = MicrophoneCaptureEngine(ringBuffer: ringBuffer)
+        let makeEngine = captureEngineFactory ?? { MicrophoneCaptureEngine(ringBuffer: $0) }
+        self.captureEngineFactory = { makeEngine(ringBuffer) }
+        self.captureEngine = makeEngine(ringBuffer)
 
         // Device enumeration runs unconditionally from init (matching
         // SignalGeneratorEngine's Output Device setup) so the Input Device
@@ -502,6 +555,7 @@ final class AudioPipelineViewModel {
         stopGeneration += 1
         haltPublishing()
         isCaptureStalled = false
+        isCaptureStarting = false
         connectionState = connectionState.stopping()
         // The engine's own stop makes blocking HAL calls -- queued off the
         // main actor (see pendingCaptureOperation), while the state changes
@@ -561,6 +615,18 @@ final class AudioPipelineViewModel {
     private func performStartCapture(deviceID: String, persistChoice: Bool, generation: Int) async {
         haltPublishing()
 
+        // [DIAG-cap] Temporary start-path timing (diagnosing intermittent
+        // slow/hung starts). Times each blocking await separately so a slow
+        // start localizes to one phase. Remove when done (grep "[DIAG-cap]").
+        let diagClock = ContinuousClock()
+        let diagEntry = diagClock.now
+        var diagMark = diagEntry
+        func diagPhase(_ name: String) {
+            let now = diagClock.now
+            diagLog.notice("[DIAG-cap] \(name, privacy: .public) took \(diagMark.duration(to: now).ms, privacy: .public)ms (gen=\(generation, privacy: .public))")
+            diagMark = now
+        }
+
         // Mic-permission race fix (closes ADR 0007's underlying bug, which
         // "measurements start off" only worked around): starting the
         // engine while macOS's asynchronous permission prompt is still
@@ -577,21 +643,36 @@ final class AudioPipelineViewModel {
             if stopGeneration == generation { connectionState = .stopped }
             return
         }
+        diagPhase("requestRecordPermission")
         isMicAccessDenied = false
         guard stopGeneration == generation else { return }
 
+        // Permission is granted and the engine work is about to begin -- from
+        // here until the first hop, show STARTING… (cleared in receive on the
+        // first hop, or on the failure path below / by stop()).
+        isCaptureStarting = true
+        isCaptureStalled = false
+
         await installConfigurationChangeHandlerIfNeeded()
         await captureEngine.stop()
+        diagPhase("captureEngine.stop")
         guard stopGeneration == generation else { return }
 
         let coreAudioDeviceID = deviceEnumerator.deviceID(forUID: deviceID)
         let hardwareRate: Double
         do {
-            hardwareRate = try await captureEngine.start(deviceID: coreAudioDeviceID)
+            hardwareRate = try await startEngineWithRecovery(coreAudioDeviceID: coreAudioDeviceID, generation: generation)
+            diagPhase("captureEngine.start")
+        } catch is CaptureStartAborted {
+            // A Stop (or other generation bump) landed during start/recovery.
+            // stop() already reset the UI; the abandoned engine(s) were
+            // deactivated inside the recovery loop. Nothing to do here.
+            return
         } catch {
-            // No hardware/permission in this environment (or denied by the
-            // user), or the device vanished between resolving it and
-            // starting -- readouts stay at their placeholder state.
+            // Either the device genuinely won't start (no hardware/permission,
+            // or it vanished between resolving and starting) or every rebuild
+            // attempt wedged -- readouts stay at their placeholder state.
+            isCaptureStarting = false
             if stopGeneration == generation { connectionState = .stopped }
             return
         }
@@ -629,10 +710,121 @@ final class AudioPipelineViewModel {
             // peaks are deliberately left untouched, same reasoning as
             // there.
             pipeline = AudioAnalysisPipeline(config: config, ringBuffer: ringBuffer, weighting: weighting, timeAveraging: timeAveraging)
+            diagPhase("sampleRateRebuild")
             guard stopGeneration == generation else { return }
         }
 
+        diagLog.notice("[DIAG-cap] performStartCapture total \(diagEntry.duration(to: diagClock.now).ms, privacy: .public)ms (gen=\(generation, privacy: .public)); arming first-hop timer")
+        firstHopStartedAt = diagClock.now
+        awaitingFirstHop = true
         beginStreaming()
+    }
+
+    /// Thrown out of `startEngineWithRecovery` when a Stop (or other
+    /// `stopGeneration` bump) lands mid-attempt -- the caller returns quietly
+    /// because `stop()` has already reset the UI.
+    private struct CaptureStartAborted: Error {}
+
+    /// Outcome of one `captureEngine.start()` attempt (nil from `firstResult`
+    /// means the deadline elapsed, i.e. wedged).
+    private enum StartAttempt: Sendable {
+        case succeeded(Double)
+        case failed
+    }
+
+    /// Starts the capture engine, recovering from a wedged *synchronous*
+    /// coreaudiod call (`route`/`engine.start()` blocking for seconds) by
+    /// **abandoning** the stuck engine and building a fresh one, rather than
+    /// waiting on a call that ignores cancellation. This is the fix for the
+    /// "capture hangs for a really long time" report: a fresh engine is a
+    /// brand-new actor with its own executor, so it isn't blocked behind the
+    /// wedged one, and the old engine's tap is silenced instantly via its
+    /// `CaptureGate` so the ring buffer keeps a single producer.
+    ///
+    /// Returns the hardware sample rate. Throws `CaptureStartAborted` if a Stop
+    /// lands mid-attempt, or a generic error if the device genuinely won't
+    /// start or all `maxStartAttempts` rebuilds wedge in a row. The tested
+    /// seam (see AudioPipelineViewModelTests): a fake whose first instance
+    /// wedges and whose second succeeds proves recovery doesn't block.
+    func startEngineWithRecovery(coreAudioDeviceID: AudioDeviceID?, generation: Int) async throws -> Double {
+        var attempt = 1
+        while true {
+            guard stopGeneration == generation else { throw CaptureStartAborted() }
+            let engine = captureEngine
+            // Race the start against the deadline WITHOUT awaiting a stuck
+            // call -- firstResult leaks the wedged task instead of blocking on
+            // it (a structured withTaskGroup would pin open until it returns).
+            let outcome: StartAttempt? = await firstResult(within: startDeadline) {
+                do { return .succeeded(try await engine.start(deviceID: coreAudioDeviceID)) }
+                catch { return .failed }
+            }
+            // A Stop during the attempt: abandon whatever we started and bail.
+            guard stopGeneration == generation else {
+                engine.deactivate()
+                Task { await engine.stop() }
+                throw CaptureStartAborted()
+            }
+            switch outcome {
+            case .succeeded(let rate):
+                return rate
+            case .failed:
+                // start() threw -- a genuinely unstartable device, not a
+                // wedge; a rebuild won't help, so report it.
+                throw CaptureStartFailed()
+            case nil:
+                // Deadline elapsed -> wedged. Silence this engine's tap
+                // instantly (gate), fire-and-forget a best-effort stop for
+                // whenever its actor unwedges, and rebuild a fresh engine.
+                diagLog.notice("[DIAG-cap] start attempt \(attempt, privacy: .public) wedged (>deadline); abandoning engine")
+                engine.deactivate()
+                Task { await engine.stop() }
+                guard attempt < Self.maxStartAttempts else { throw CaptureStartFailed() }
+                attempt += 1
+                captureEngine = captureEngineFactory()
+                // The new engine needs its own config-change handler.
+                configurationChangeHandlerInstalled = false
+                await installConfigurationChangeHandlerIfNeeded()
+            }
+        }
+    }
+
+    /// Thrown when the device won't start or all rebuild attempts wedged.
+    private struct CaptureStartFailed: Error {}
+
+    /// Single-fire continuation guard for `firstResult`: the operation task
+    /// and the timeout task both race to fulfill one continuation; only the
+    /// first wins. MainActor-isolated so the `done` check is race-free.
+    @MainActor private final class SingleResume<V: Sendable> {
+        private var done = false
+        func fulfill(_ continuation: CheckedContinuation<V, Never>, with value: V) {
+            guard !done else { return }
+            done = true
+            continuation.resume(returning: value)
+        }
+    }
+
+    /// Runs `operation` unstructured and returns its value, or nil if
+    /// `timeout` elapses first. On timeout the operation is **not** awaited --
+    /// it keeps running detached and its result is discarded. Essential for a
+    /// wedged synchronous coreaudiod call, which ignores cancellation and
+    /// would pin a structured `withTaskGroup` open until it unwedges.
+    /// MainActor-isolated, so the single-resume guard is race-free.
+    private func firstResult<T: Sendable>(
+        within timeout: Duration,
+        of operation: @escaping @Sendable () async -> T
+    ) async -> T? {
+        let opTask = Task { await operation() }
+        let resume = SingleResume<T?>()
+        return await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+            Task { @MainActor in
+                let value = await opTask.value
+                resume.fulfill(continuation, with: value)
+            }
+            Task { @MainActor in
+                try? await Task.sleep(for: timeout)
+                resume.fulfill(continuation, with: nil)
+            }
+        }
     }
 
     /// Starts consuming the pipeline's result stream and arms the stall
@@ -701,8 +893,16 @@ final class AudioPipelineViewModel {
 
     private func receive(_ result: AnalysisResult) {
         lastHopAt = Date()
+        // [DIAG-cap] First hop after a start: log start-to-first-hop latency.
+        if awaitingFirstHop, let firstHopStartedAt {
+            diagLog.notice("[DIAG-cap] first hop \(firstHopStartedAt.duration(to: ContinuousClock.now).ms, privacy: .public)ms after beginStreaming")
+            awaitingFirstHop = false
+            self.firstHopStartedAt = nil
+        }
         stallRestartCount = 0
         isCaptureStalled = false
+        // A delivered hop means capture is live -- no longer "starting."
+        isCaptureStarting = false
 
         if result.splDb <= Self.digitalSilenceThresholdDb {
             consecutiveSilentHops += 1

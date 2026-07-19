@@ -295,13 +295,22 @@ struct WaterfallZoneView: View {
                 .frame(width: 220, height: 6)
                 .clipShape(Capsule())
                 .opacity(0.85)
-            // Names both ways to start: the Start control and the spacebar
-            // shortcut (KeyboardShortcuts: space = Start/Stop), so the
+            // While a Start is in progress (between the press and the first
+            // hop -- possibly a slow coreaudiod start) show "Starting…" so the
+            // empty state reads as working, not idle. Otherwise the usual
+            // affordance, naming both ways to start: the Start control and the
+            // spacebar shortcut (KeyboardShortcuts: space = Start/Stop), so the
             // shortcut is discoverable from the empty state itself.
-            HStack(spacing: 6) {
-                Text("Press Start or")
-                keycap("Space")
-                Text("to measure")
+            Group {
+                if pipeline.isCaptureStarting {
+                    Text("Starting…")
+                } else {
+                    HStack(spacing: 6) {
+                        Text("Press Start or")
+                        keycap("Space")
+                        Text("to measure")
+                    }
+                }
             }
             .font(.system(size: Typography.controlSize, weight: .medium))
             .foregroundStyle(theme.textDim)
