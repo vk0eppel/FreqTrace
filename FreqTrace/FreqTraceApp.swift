@@ -21,7 +21,7 @@ struct FreqTraceApp: App {
                 .environment(appearanceSettings)
                 .environment(\.theme, Theme(mode: .default))
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)
         .commands {
             // View menu > Appearance (ADR 0005 addendum): still the manual,
             // venue-driven Dark/Light choice -- deliberately NOT tied to the
