@@ -1,7 +1,13 @@
 # Releasing FreqTrace
 
-Manual, lightweight release process (no CI). First release was **v0.1.0**.
-There is no `.github/workflows` automation yet — every step below is by hand.
+Lightweight release process (no CI). First release was **v0.1.0**.
+
+**Automated:** `scripts/release.sh vX.Y.Z --publish` runs the whole flow below
+(build signed Release → verify signature → `ditto`-zip → create/upload the
+GitHub release targeting `main`). Omit `--publish` to build + zip only. It
+mirrors SoundCheck's `scripts/release.sh`, so the two companion apps share one
+release path. The manual steps below remain the reference for what it does —
+and the one thing it doesn't automate: the version bump (step 1).
 
 ## ⚠️ Signing caveat (read first)
 
