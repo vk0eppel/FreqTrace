@@ -36,6 +36,18 @@ final class OcclusionPausingMTKView: MTKView {
     /// any thread is documented-safe for NotificationCenter.
     private nonisolated(unsafe) var occlusionObserver: (any NSObjectProtocol)?
 
+    /// Whether the waterfall has anything to animate: true only while capture
+    /// is running and not frozen (set from MetalWaterfallView.updateNSView).
+    /// Combined with window visibility to decide `isPaused` -- a stopped or
+    /// frozen waterfall is a static image, so running the 60fps render loop
+    /// for it is pure waste (profiled: continuous rendering while stopped was
+    /// ~17% CPU doing nothing). Un-pausing needs no catch-up (draw always
+    /// renders current state; scroll is wall-clock-derived).
+    var shouldAnimate = true {
+        didSet { recomputePauseState() }
+    }
+    private var windowVisible = true
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if let occlusionObserver {
@@ -64,7 +76,12 @@ final class OcclusionPausingMTKView: MTKView {
     }
 
     private func updatePauseState(for window: NSWindow) {
-        isPaused = !window.occlusionState.contains(.visible)
+        windowVisible = window.occlusionState.contains(.visible)
+        recomputePauseState()
+    }
+
+    private func recomputePauseState() {
+        isPaused = !(shouldAnimate && windowVisible)
     }
 
     deinit {
@@ -81,22 +98,18 @@ struct MetalWaterfallView: NSViewRepresentable {
     /// possible if this view's own makeCoordinator() is the only thing
     /// that ever constructs one.
     let renderer: WaterfallRenderer
-    let magnitudes: [Float]
-    let config: AnalysisConfig
     /// Ticket #10: selects which of WaterfallColorMap's ramps the GPU
-    /// fragment shader samples from.
+    /// fragment shader samples from. Kept as a view parameter (unlike the
+    /// magnitude data, which now feeds the renderer directly via
+    /// AudioPipelineViewModel.waterfallSink) because appearance changes are
+    /// rare and driving them through SwiftUI costs nothing per hop.
     var appearanceMode: AppearanceMode = .default
-    /// Bug fix: raw vDSP power isn't already on a [0,1]/dBFS scale --
-    /// WaterfallRenderer.writeRow divides by this before applying
-    /// MagnitudeScaling's dB floor/ceiling. See FrequencyTracker.fullScalePower.
-    var fullScalePower: Float = 1
-    /// Octave-banding resolution (user request: "the same for the
-    /// waterfall" as RTA's selectable bars-per-octave) -- pre-bins
-    /// `magnitudes` into piecewise-flat bands before writing to the GPU
-    /// texture, reusing RTABinning's bar-centric logic (RTABinning.swift's
-    /// `steppedMagnitudes`) rather than resampling to a smaller texture, so
-    /// none of the Metal-side remap math or texture sizing needs to change.
-    var bandingResolution: RTABandingResolution = .oneOverTwelve
+    /// Drives the render loop's pause state: the 60fps loop only runs while
+    /// capture is live and unfrozen. A stopped or frozen waterfall is static,
+    /// so rendering it continuously is wasted CPU (see
+    /// OcclusionPausingMTKView.shouldAnimate). Changes rarely (start/stop/
+    /// freeze), so reading it in the view body costs nothing per hop.
+    var isActive: Bool = true
 
     // No Coordinator: makeCoordinator() only ever runs once for the MTKView's
     // lifetime, so caching `renderer` there (as this used to) left the
@@ -111,10 +124,11 @@ struct MetalWaterfallView: NSViewRepresentable {
     // Always reading `renderer` (this struct's own property, fresh on every
     // SwiftUI re-render) instead of `context.coordinator` keeps the MTKView
     // wired to whichever renderer WaterfallZoneView currently owns.
-    func makeNSView(context: Context) -> MTKView {
+    func makeNSView(context: Context) -> OcclusionPausingMTKView {
         let view = OcclusionPausingMTKView()
         view.device = MTLCreateSystemDefaultDevice()
         view.delegate = renderer
+        view.shouldAnimate = isActive
         view.colorPixelFormat = .bgra8Unorm
         view.clearColor = MTLClearColorMake(0, 0, 0, 1)
         // Bumped from 30 (ticket #15, fluid-scroll fix): fractionalRow
@@ -128,14 +142,16 @@ struct MetalWaterfallView: NSViewRepresentable {
         return view
     }
 
-    func updateNSView(_ nsView: MTKView, context: Context) {
+    func updateNSView(_ nsView: OcclusionPausingMTKView, context: Context) {
         // Re-assigned every update (cheap, idempotent when unchanged) so a
         // renderer swap takes effect immediately rather than waiting on
-        // some other coordinator lifecycle event.
+        // some other coordinator lifecycle event. Magnitude frames no longer
+        // flow through here (they feed the renderer directly via
+        // AudioPipelineViewModel.waterfallSink) -- this only runs when an
+        // actual view input changes (appearance mode, renderer swap), not
+        // every hop, so the waterfall zone no longer re-lays-out ~23x/s.
         nsView.delegate = renderer
         renderer.setAppearanceMode(appearanceMode)
-        guard !magnitudes.isEmpty else { return }
-        let stepped = RTABinning.steppedMagnitudes(magnitudes: magnitudes, config: config, barsPerOctave: bandingResolution.rawValue)
-        renderer.pushMagnitudes(stepped, fullScalePower: fullScalePower)
+        nsView.shouldAnimate = isActive
     }
 }

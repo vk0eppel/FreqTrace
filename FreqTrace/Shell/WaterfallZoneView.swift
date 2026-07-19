@@ -60,9 +60,8 @@ struct WaterfallZoneView: View {
                 if let waterfallRenderer {
                     MetalWaterfallView(
                         renderer: waterfallRenderer,
-                        magnitudes: pipeline.latestMagnitudes, config: pipeline.config,
-                        appearanceMode: theme.mode, fullScalePower: pipeline.fullScalePower,
-                        bandingResolution: pipeline.bandingResolution
+                        appearanceMode: theme.mode,
+                        isActive: pipeline.isCaptureActive && !pipeline.isFrozen
                     )
                 }
                 frequencyAxisLabels
@@ -72,7 +71,7 @@ struct WaterfallZoneView: View {
                 frequencyAxisLabels
                 dbAxisLabels
             }
-            if pipeline.latestMagnitudes.isEmpty {
+            if !pipeline.hasWaterfallData {
                 emptyStateOverlay
             }
             hoverOverlay
@@ -104,8 +103,17 @@ struct WaterfallZoneView: View {
             // happens is expected, same as switching bandingResolution
             // already clears RTA bar peaks.
             guard let device = MTLCreateSystemDefaultDevice() else { return }
-            waterfallRenderer = WaterfallRenderer(device: device, config: pipeline.config)
+            let renderer = WaterfallRenderer(device: device, config: pipeline.config)
+            waterfallRenderer = renderer
+            // Feed hop frames straight to this renderer, outside SwiftUI (perf:
+            // AudioPipelineViewModel.waterfallSink) -- re-registered here so a
+            // renderer swap (FFT-size change) always points the sink at the
+            // current renderer. Weak so a discarded renderer isn't retained.
+            pipeline.waterfallSink = { [weak renderer] stepped, fullScalePower in
+                renderer?.pushMagnitudes(stepped, fullScalePower: fullScalePower)
+            }
         }
+        .onDisappear { pipeline.waterfallSink = nil }
     }
 
     // Mouse-over exact-value readout (user request: "Mouse over waterfall

@@ -31,7 +31,25 @@ final class AudioPipelineViewModel {
     private(set) var trackedFrequencyHz: Double?
     /// Raw, unweighted power magnitude spectrum from the most recent hop --
     /// the waterfall's per-frame row. See FrequencyTracker.spectrum(in:).
+    /// NOTE: no longer read by any SwiftUI view (perf) -- the waterfall is fed
+    /// via `waterfallSink` and its empty state via `hasWaterfallData`. Kept as
+    /// the source `apply()` derives both of those from; assigning it every hop
+    /// now invalidates nothing.
     private(set) var latestMagnitudes: [Float] = []
+    /// Direct per-hop feed to the Metal waterfall renderer, registered by
+    /// WaterfallZoneView once its renderer exists. @ObservationIgnored and a
+    /// plain closure, deliberately NOT an @Observable property: pushing a hop
+    /// frame this way updates the GPU texture WITHOUT invalidating any SwiftUI
+    /// view, so the waterfall zone no longer re-lays-out its entire subtree
+    /// (Metal view + every axis label) ~23x/s just to hand the magnitude array
+    /// through as a view parameter. Profiled: this was the bulk of idle CPU
+    /// after the window-resizability fix.
+    @ObservationIgnored var waterfallSink: (@MainActor (_ stepped: [Float], _ fullScalePower: Float) -> Void)?
+    /// Whether a frame is available to display (drives the empty-state
+    /// overlay). A separate Bool, not `latestMagnitudes.isEmpty`, so the
+    /// overlay depends on a value that only flips on the empty<->data
+    /// transition rather than on the array that changes every hop.
+    private(set) var hasWaterfallData = false
     /// Raw (pre-offset) weighted level in dB from the most recent hop. See
     /// FrequencyTracker.weightedLevelDb(fromMagnitudes:weighting:).
     private(set) var splDb: Double?
@@ -925,6 +943,14 @@ final class AudioPipelineViewModel {
     private func apply(_ result: AnalysisResult) {
         trackedFrequencyHz = result.trackedFrequencyHz
         latestMagnitudes = result.magnitudes
+        if !hasWaterfallData { hasWaterfallData = true }
+        // Feed the waterfall renderer directly (outside SwiftUI) -- see
+        // waterfallSink. Same per-hop binning the old MetalWaterfallView.
+        // updateNSView did, just no longer routed through a view parameter.
+        if let waterfallSink {
+            let stepped = RTABinning.steppedMagnitudes(magnitudes: result.magnitudes, config: config, barsPerOctave: bandingResolution.rawValue)
+            waterfallSink(stepped, result.fullScalePower)
+        }
         splDb = result.splDb
         trackedFrequencyLevelDb = result.trackedFrequencyLevelDb
         anomalyCandidates = result.anomalyCandidates
@@ -1000,6 +1026,7 @@ final class AudioPipelineViewModel {
         guard !isFrozen else { return }
         trackedFrequencyHz = nil
         latestMagnitudes = []
+        hasWaterfallData = false
         splDb = nil
         trackedFrequencyLevelDb = nil
         anomalyCandidates = []
