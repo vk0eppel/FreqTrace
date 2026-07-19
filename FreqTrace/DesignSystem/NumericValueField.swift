@@ -25,30 +25,42 @@ struct NumericValueField: View {
     /// to the original dB box's "-66dB" style.
     var format: (Double) -> String = { "\(Int($0.rounded()))dB" }
     var width: CGFloat = 64
+    /// Optional control tucked inside the field's border, to the right of the
+    /// (trailing-aligned) value -- e.g. the Signal Generator's ISO Band
+    /// dropdown, so the field reads as one combo box (type a value OR pick
+    /// from the accessory) rather than a field with a separate button beside
+    /// it. Defaults to nothing, so the dB/offset fields are unchanged.
+    var trailingAccessory: AnyView? = nil
     @State private var text: String = ""
     @FocusState private var isFocused: Bool
 
     var body: some View {
-        TextField("value", text: $text)
-            .textFieldStyle(.plain)
-            .multilineTextAlignment(.trailing)
-            .frame(width: width)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .background(theme.surface)
-            .overlay {
-                RoundedRectangle(cornerRadius: 4)
-                    .strokeBorder(theme.border)
+        HStack(spacing: 4) {
+            TextField("value", text: $text)
+                .textFieldStyle(.plain)
+                .multilineTextAlignment(.trailing)
+                .frame(width: width)
+                .focused($isFocused)
+                .onAppear { text = format(value) }
+                .onChange(of: value) { _, newValue in
+                    if !isFocused { text = format(newValue) }
+                }
+                .onChange(of: isFocused) { _, focused in
+                    if !focused { commit() }
+                }
+                .onSubmit { commit() }
+
+            if let trailingAccessory {
+                trailingAccessory
             }
-            .focused($isFocused)
-            .onAppear { text = format(value) }
-            .onChange(of: value) { _, newValue in
-                if !isFocused { text = format(newValue) }
-            }
-            .onChange(of: isFocused) { _, focused in
-                if !focused { commit() }
-            }
-            .onSubmit { commit() }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(theme.surface)
+        .overlay {
+            RoundedRectangle(cornerRadius: 4)
+                .strokeBorder(theme.border)
+        }
     }
 
     private func commit() {

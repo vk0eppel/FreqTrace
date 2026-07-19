@@ -83,7 +83,10 @@ struct SignalGeneratorControlView: View {
     // buttons jump to the next/previous standard ISO 1/3-octave center
     // (the primary interaction, matching graphic EQ fader spacing); the
     // numeric Hz field is the fallback for an exact custom value, including
-    // landing off-grid between two centers.
+    // landing off-grid between two centers. The ▾ dropdown (user request) is
+    // the third path -- pick any standard center from the list directly,
+    // without stepping to it -- making this a combo box: type freely OR
+    // choose from the list.
     private var sineFrequencyControl: some View {
         HStack(spacing: 4) {
             stepButton(systemName: "chevron.left") { engine.stepSineFrequencyDown() }
@@ -92,11 +95,47 @@ struct SignalGeneratorControlView: View {
                 value: $engine.sineFrequencyHz,
                 range: SignalGeneratorEngine.sineFrequencyRangeHz,
                 format: Self.formattedHz,
-                width: 60
+                width: 56,
+                trailingAccessory: AnyView(isoBandDropdown)
             )
 
             stepButton(systemName: "chevron.right") { engine.stepSineFrequencyUp() }
         }
+    }
+
+    // ISO Band dropdown (user request): the "jump straight to this center"
+    // half of the combo box, complementing the free-text field and the ‹ ›
+    // step buttons. It lives *inside* the frequency field's border (as the
+    // field's trailingAccessory) so the field itself reads as one combo box
+    // rather than a field with a separate button beside it. Reuses the app's
+    // SwiftUI Menu picker idiom (same as the Input/Output Device pickers in
+    // ControlsRowView) over ISOBand.centers -- the exact series the step
+    // buttons walk, so field, buttons, and list all agree. Every center is
+    // within sineFrequencyRangeHz by construction, so assigning it needs no
+    // clamping (sineFrequencyHz's didSet re-syncs the render state). A
+    // checkmark marks the active center when the frequency is on-grid; a
+    // freely-typed off-grid value simply shows none.
+    private var isoBandDropdown: some View {
+        Menu {
+            ForEach(ISOBand.centers, id: \.self) { center in
+                Button {
+                    engine.sineFrequencyHz = center
+                } label: {
+                    if center == engine.sineFrequencyHz {
+                        Label(Self.formattedHz(center), systemImage: "checkmark")
+                    } else {
+                        Text(Self.formattedHz(center))
+                    }
+                }
+            }
+        } label: {
+            Image(systemName: "chevron.down")
+                .font(.system(size: Typography.controlSize, weight: .semibold))
+                .foregroundStyle(theme.textDim)
+        }
+        .menuIndicator(.hidden)
+        .menuStyle(.borderlessButton)
+        .fixedSize()
     }
 
     private func stepButton(systemName: String, action: @escaping () -> Void) -> some View {
