@@ -131,7 +131,14 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     func trackedFrequency(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Double? {
         guard let bestBin = bestWeightedBin(fromMagnitudes: magnitudes, weighting: weighting) else { return nil }
         let binHz = config.sampleRate / Double(config.windowSize)
-        return Double(bestBin) * binHz
+        // Parabolic (quadratic) sub-bin interpolation: the pure argmax bin can
+        // only ever report a multiple of binHz, so the same tone drifted across
+        // window sizes (46.9Hz bins at 1024 -> 2.93Hz at 16384). Refining the
+        // peak's location between bins makes the readout stable and accurate
+        // regardless of FFT size (user report: "the tracked frequency value
+        // change with fft size").
+        let offset = parabolicPeakOffset(fromMagnitudes: magnitudes, weighting: weighting, bin: bestBin)
+        return (Double(bestBin) + offset) * binHz
     }
 
     /// The level (dB) of whichever bin trackedFrequency(fromMagnitudes:
@@ -177,6 +184,35 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         }
 
         return bestBin > 0 ? bestBin : nil
+    }
+
+    /// Sub-bin peak offset in [-0.5, +0.5] via quadratic (parabolic)
+    /// interpolation over the winning bin and its two neighbors, in the
+    /// log-magnitude domain (`log(power)` -- the standard form; a windowed
+    /// sinusoid's main lobe is near-parabolic in log magnitude, so this
+    /// estimates the true peak location between bins). Interpolates the same
+    /// *weighted* values the argmax used, so the lobe shape matches the winner.
+    /// Returns 0 (i.e. the bare bin center) at the spectrum edges or on a flat
+    /// top, where the three-point fit is undefined.
+    private func parabolicPeakOffset(fromMagnitudes magnitudes: [Float], weighting: Weighting, bin: Int) -> Double {
+        let table = gainTables[weighting] ?? []
+        // Need both neighbors; bin 1's lower neighbor is DC (bin 0), which
+        // isn't a meaningful spectral point, so skip interpolation there too.
+        guard bin > 1, bin + 1 < min(magnitudes.count, table.count) else { return 0 }
+
+        func logWeighted(_ b: Int) -> Double? {
+            let power = Double(magnitudes[b]) * Double(table[b])
+            guard power > 0 else { return nil }
+            return log(power)
+        }
+        guard let alpha = logWeighted(bin - 1),
+              let beta = logWeighted(bin),
+              let gamma = logWeighted(bin + 1) else { return 0 }
+
+        let denom = alpha - 2 * beta + gamma
+        guard denom != 0 else { return 0 }
+        let offset = 0.5 * (alpha - gamma) / denom
+        return min(0.5, max(-0.5, offset))
     }
 
     /// Weighted overall level in dB from an already-computed magnitude
