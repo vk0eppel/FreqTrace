@@ -27,6 +27,20 @@ struct TimeAveragingTests {
         #expect(first == [3, 3, 3])
     }
 
+    @Test func noneAppliesNoSmoothingSoEveryFramePassesThroughUnchanged() {
+        var blender = TimeAveragingBlender()
+        let first = blender.blend([1, 1, 1], preset: .none, hopDuration: largeHop)
+        let second = blender.blend([5, 5, 5], preset: .none, hopDuration: largeHop)
+
+        #expect(first == [1, 1, 1])
+        #expect(second == [5, 5, 5]) // no lag from the previous frame at all
+    }
+
+    @Test func noneIsTheOrderedFirstOptionAndTheMostResponsive() {
+        // Controls row iterates allCases -- None must sort before Fast/Slow.
+        #expect(TimeAveragingPreset.allCases.first == TimeAveragingPreset.none)
+    }
+
     @Test func fastAppliesLightSmoothingButRespondsFasterThanSlow() {
         var fast = TimeAveragingBlender()
         var slow = TimeAveragingBlender()

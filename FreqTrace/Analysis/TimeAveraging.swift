@@ -3,11 +3,12 @@
 //  FreqTrace
 //
 //  Post-FFT frame-blending (ticket #7, CONTEXT.md "Time Averaging"): an
-//  exponential moving average over consecutive magnitude spectra, applied
-//  only to the spectrum Tracked Frequency's argmax reads -- never to
-//  spectrum(in:)'s output (the waterfall/RTA/SPL all need the true,
-//  unblended measurement), and never touching FrequencyTracker's FFT setup
-//  (AC: "does not change FFT frequency resolution/window size").
+//  exponential moving average over consecutive magnitude spectra, feeding
+//  Tracked Frequency (+ its level), SPL, and the waterfall/RTA display --
+//  everything except the Anomaly Candidate detector, which reads the raw,
+//  unblended spectrum (ADR 0001: a building ring must be caught fast, not
+//  smoothed away). Never touches FrequencyTracker's FFT setup (AC: "does not
+//  change FFT frequency resolution/window size").
 //
 //  Fast/Slow are real *time constants* (125 ms / 1 s), not raw per-frame
 //  weights (user request). The per-hop EMA weight is derived from the target
@@ -27,7 +28,10 @@ import Foundation
 // background actor can call blend(_:preset:hopDuration:) directly; leaving
 // them implicitly MainActor-isolated was a Swift 6 language-mode error
 // waiting to happen (warned in Swift 5 mode).
+// Declaration order is UI order (the Controls row iterates allCases):
+// None -> Fast -> Slow, least to most smoothing.
 nonisolated enum TimeAveragingPreset: String, CaseIterable, Identifiable {
+    case none = "None"
     case fast = "Fast"
     case slow = "Slow"
 
@@ -35,10 +39,13 @@ nonisolated enum TimeAveragingPreset: String, CaseIterable, Identifiable {
 
     /// The smoothing time constant (seconds): the wall-clock time the EMA
     /// takes to cover ~63% of a step, independent of FFT size / hop rate.
-    /// 125 ms (Fast) / 1 s (Slow) per user request -- note Fast is now a
-    /// defined light smoothing, no longer a pure passthrough.
-    fileprivate var timeConstantSeconds: Double {
+    /// 125 ms (Fast) / 1 s (Slow) match IEC 61672's SPL-meter Fast/Slow
+    /// (see docs/research/fast-slow-time-weighting.md). `nil` for None --
+    /// no time averaging at all, each frame replaces the last (REW's
+    /// "Live/None"), the most responsive setting.
+    fileprivate var timeConstantSeconds: Double? {
         switch self {
+        case .none: nil
         case .fast: 0.125
         case .slow: 1.0
         }
@@ -47,9 +54,11 @@ nonisolated enum TimeAveragingPreset: String, CaseIterable, Identifiable {
     /// Per-hop weight for the newest frame, derived from the time constant
     /// and the actual hop duration via the zero-order-hold discretization of
     /// a first-order low-pass (w = 1 - exp(-Δt/τ)) -- so the effective time
-    /// constant is τ regardless of how often hops arrive.
+    /// constant is τ regardless of how often hops arrive. None returns 1.0
+    /// (pure passthrough: the new frame fully replaces the previous).
     fileprivate func newFrameWeight(hopDuration: Double) -> Float {
-        Float(1 - exp(-hopDuration / timeConstantSeconds))
+        guard let timeConstantSeconds else { return 1.0 }
+        return Float(1 - exp(-hopDuration / timeConstantSeconds))
     }
 }
 
