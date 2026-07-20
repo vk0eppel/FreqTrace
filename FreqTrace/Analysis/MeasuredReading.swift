@@ -29,8 +29,10 @@ nonisolated struct MeasuredReading: Equatable {
     /// Em dash -- the same placeholder the row used before the split.
     static let placeholderNumber = "\u{2014}"
 
-    /// Tracked Frequency (hero). Whole Hz -- finer than the FFT's own bin
-    /// resolution would be false precision (see AudioPipelineViewModel).
+    /// Tracked Frequency (hero). Whole Hz -- the tracker's parabolic sub-bin
+    /// interpolation (FrequencyTracker.trackedFrequency) makes whole Hz an
+    /// accurate, FFT-size-stable value rather than the bin grid's ceiling, so
+    /// this rounds cleanly to whole Hz for a distance-legible readout.
     static func frequency(hz: Double?) -> MeasuredReading {
         guard let hz else {
             return MeasuredReading(number: placeholderNumber, unit: "Hz", hasValue: false)

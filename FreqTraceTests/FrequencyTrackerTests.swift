@@ -41,6 +41,58 @@ struct FrequencyTrackerTests {
         #expect(abs(frequency - 440) <= binResolutionHz)
     }
 
+    // Parabolic sub-bin interpolation (user report: "the tracked frequency
+    // value change with fft size"). A tone sitting *between* two bin centers
+    // must resolve far tighter than the raw bin width -- a pure argmax could
+    // only ever report one of the two flanking centers (~+/-6Hz off here at
+    // the 8192/48kHz default), whereas interpolation locates the true peak
+    // between them.
+    @Test func interpolatesAToneBetweenBinCentersFarTighterThanBinWidth() throws {
+        let tracker = FrequencyTracker(config: config)
+        // Halfway between bins: bin index (1000/binHz rounded) + 0.5.
+        let midBinHz = (Double(Int(1000 / binResolutionHz)) + 0.5) * binResolutionHz
+        let samples = sineWave(frequency: midBinHz, sampleRate: config.sampleRate, count: config.windowSize)
+
+        let frequency = try #require(tracker.trackedFrequency(in: samples, weighting: .z))
+
+        // Well inside a quarter-bin -- unreachable without interpolation.
+        #expect(abs(frequency - midBinHz) <= binResolutionHz / 4)
+    }
+
+    // The whole point of the change: the same physical tone reads ~the same
+    // value regardless of FFT size, instead of snapping to each size's own bin
+    // grid (46.9Hz bins at 1024 down to 2.93Hz at 16384).
+    @Test func reportsAStableFrequencyAcrossFFTSizes() throws {
+        let trueHz = 997.0 // deliberately off every size's bin grid
+        var readings: [Double] = []
+        for size in FFTWindowSize.allCases {
+            let config = size.config(sampleRate: 48_000)
+            let tracker = FrequencyTracker(config: config)
+            let samples = FrequencyTracker.sineWave(frequency: trueHz, sampleRate: config.sampleRate, count: config.windowSize)
+            let frequency = try #require(tracker.trackedFrequency(in: samples, weighting: .z))
+            readings.append(frequency)
+        }
+        // Every size lands within a few Hz of the true tone, so the spread
+        // across sizes is small -- the drift the user reported is gone.
+        for reading in readings {
+            #expect(abs(reading - trueHz) <= 3.0)
+        }
+        let spread = (readings.max() ?? 0) - (readings.min() ?? 0)
+        #expect(spread <= 4.0)
+    }
+
+    // Edge safety: a near-DC winner (where interpolation would reach toward
+    // bin 0) still returns a finite value and doesn't crash.
+    @Test func handlesANearDCToneWithoutCrashing() throws {
+        let tracker = FrequencyTracker(config: config)
+        // Bin 1 territory at the default config (~5.86Hz).
+        let samples = sineWave(frequency: binResolutionHz, sampleRate: config.sampleRate, count: config.windowSize)
+
+        let frequency = try #require(tracker.trackedFrequency(in: samples, weighting: .z))
+        #expect(frequency.isFinite)
+        #expect(frequency > 0)
+    }
+
     @Test func usesOnlyTheMostRecentWindowWhenGivenMoreSamplesThanNeeded() throws {
         let tracker = FrequencyTracker(config: config)
         // Prepend a full window of a different, louder tone -- only the
