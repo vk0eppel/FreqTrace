@@ -162,17 +162,25 @@ actor AudioAnalysisPipeline {
                 let hopDuration = Double(config.hopSize) / config.sampleRate
                 let blendedForTracking = timeAveragingBlender.blend(magnitudes, preset: timeAveraging, hopDuration: hopDuration)
                 if let frequency = tracker.trackedFrequency(fromMagnitudes: blendedForTracking, weighting: weighting) {
-                    let splDb = tracker.weightedLevelDb(fromMagnitudes: magnitudes, weighting: weighting)
+                    // SPL reads the time-averaged (blended) spectrum too (user
+                    // request). Averaging power then converting to dB is the
+                    // correct energy-average, exactly how a real Fast/Slow SPL
+                    // meter integrates -- so Fast/Slow now govern how quickly
+                    // the SPL readout settles, like Tracked Frequency.
+                    let splDb = tracker.weightedLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting)
                     let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting) ?? -Double.infinity
                     // Raw, unblended, unweighted magnitudes -- ADR 0001
                     // requires the true measured spectrum so a genuine
                     // low-frequency resonance isn't hidden by A-weighting's
-                    // roll-off or smoothed away by Slow averaging.
+                    // roll-off or smoothed away by Slow averaging. The Anomaly
+                    // detector is the ONLY consumer still reading the raw
+                    // spectrum; everything else (Tracked Frequency + level,
+                    // SPL, waterfall/RTA) reads the blended one.
                     let anomalyCandidates = anomalyDetector.process(magnitudes: magnitudes, config: config)
                     // What the waterfall/RTA actually display: Weighting
-                    // and Time Averaging both applied, unlike magnitudes
-                    // above (found by user report: these controls
-                    // previously had no visible effect on either view).
+                    // and Time Averaging both applied (found by user report:
+                    // these controls previously had no visible effect on
+                    // either view).
                     let displaySpectrum = tracker.weightedSpectrum(fromMagnitudes: blendedForTracking, weighting: weighting)
                     continuation.yield(AnalysisResult(
                         trackedFrequencyHz: frequency, magnitudes: displaySpectrum, splDb: splDb,

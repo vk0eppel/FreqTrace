@@ -3,11 +3,12 @@
 //  FreqTrace
 //
 //  Post-FFT frame-blending (ticket #7, CONTEXT.md "Time Averaging"): an
-//  exponential moving average over consecutive magnitude spectra, applied
-//  only to the spectrum Tracked Frequency's argmax reads -- never to
-//  spectrum(in:)'s output (the waterfall/RTA/SPL all need the true,
-//  unblended measurement), and never touching FrequencyTracker's FFT setup
-//  (AC: "does not change FFT frequency resolution/window size").
+//  exponential moving average over consecutive magnitude spectra, feeding
+//  Tracked Frequency (+ its level), SPL, and the waterfall/RTA display --
+//  everything except the Anomaly Candidate detector, which reads the raw,
+//  unblended spectrum (ADR 0001: a building ring must be caught fast, not
+//  smoothed away). Never touches FrequencyTracker's FFT setup (AC: "does not
+//  change FFT frequency resolution/window size").
 //
 //  Fast/Slow are real *time constants* (125 ms / 1 s), not raw per-frame
 //  weights (user request). The per-hop EMA weight is derived from the target
