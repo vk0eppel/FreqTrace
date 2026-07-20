@@ -159,7 +159,8 @@ actor AudioAnalysisPipeline {
                 // rejected ("cannot be passed 'inout' to implicitly 'async'
                 // function call") and a copy-out/mutate/copy-back dance was
                 // needed here -- the isolation fix dissolved it.
-                let blendedForTracking = timeAveragingBlender.blend(magnitudes, preset: timeAveraging)
+                let hopDuration = Double(config.hopSize) / config.sampleRate
+                let blendedForTracking = timeAveragingBlender.blend(magnitudes, preset: timeAveraging, hopDuration: hopDuration)
                 if let frequency = tracker.trackedFrequency(fromMagnitudes: blendedForTracking, weighting: weighting) {
                     let splDb = tracker.weightedLevelDb(fromMagnitudes: magnitudes, weighting: weighting)
                     let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting) ?? -Double.infinity
