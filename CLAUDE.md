@@ -111,7 +111,7 @@ See [CONTEXT.md](./CONTEXT.md) for precise definitions. Summary:
   | text | `#e8ecef` | `#14171b` |
   | text-dim | `#8b939c` | `#565d66` |
   | text-faint | `#7a8189` (was `#565d66`, 2.7:1 — fixed to 4.56:1) | `#5c6167` (was `#9aa0a7`, 2.64:1 — fixed to 6.25:1) |
-  | accent | `#ffb84d` | `#8f4d00` (was `#c9770a`, 3.0:1 — fixed to 6.5:1) |
+  | accent | `#00c0e7` | `#0a6c86` (cyan brand accent, unified with the app icon — replaced the earlier amber `#ffb84d`/`#8f4d00`; light darkened for contrast on the light bg) |
   | danger | `#ff5a5a` | `#c62f2f` |
   | warn | `#ffcf5c` | `#6e4e00` (was `#a8790a`, 3.89:1 — fixed to 7.63:1) |
   | border | `#262b31` | `#d7dbdf` |
