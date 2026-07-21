@@ -39,6 +39,25 @@ nonisolated enum FrequencyAxis {
         let label: String
     }
 
+    /// A single axis gridline for a selectable FrequencyScale (issue #25):
+    /// `hz` positions it on the shared log map, `label` is its k-notation
+    /// text, and `isMajor` distinguishes the emphasized reference lines
+    /// (octave centers, or a decade grid's 100/1k/10k) from the fainter
+    /// minor lines between them, so the renderer can draw two line weights.
+    struct Gridline {
+        let hz: Double
+        let label: String
+        let isMajor: Bool
+    }
+
+    /// k-notation label for a whole-Hz gridline frequency ("500", "1k",
+    /// "2k", "20k") -- the same convention labeledBands and FFTWindowSize
+    /// use. Values >= 1000 are exact multiples of 1000 on both scales, so
+    /// this is always a clean whole number of "k".
+    static func label(forHz hz: Double) -> String {
+        hz >= 1000 ? "\(Int(hz / 1000))k" : "\(Int(hz))"
+    }
+
     /// Standard octave-band series, 20Hz-20kHz (revised from ticket #8's
     /// original coarser set per user request): "labeled at meaningful
     /// bands, not raw FFT bins," now matching the octave spacing real

@@ -63,6 +63,56 @@ struct FrequencyAxisTests {
     }
 }
 
+// Selectable frequency-axis scale (issue #25): Octave (default) reuses the
+// ISO octave series; Decade is the REW/Smaart-style log grid (bold decade
+// lines + minor 2-9 lines). This is a labels-only concern -- the axis
+// mapping (FrequencyAxis) is unchanged -- so these cover the series each
+// scale produces, not any positioning math.
+struct FrequencyScaleTests {
+
+    @Test func octaveFirstIsTheDefault() {
+        #expect(FrequencyScale.allCases.first == .octave)
+    }
+
+    @Test func octaveScaleMirrorsTheOctaveBandSeriesAllMajor() {
+        let lines = FrequencyScale.octave.gridlines
+        #expect(lines.map(\.label) == FrequencyAxis.labeledBands.map(\.label))
+        #expect(lines.map(\.hz) == FrequencyAxis.labeledBands.map(\.hz))
+        #expect(lines.allSatisfy { $0.isMajor })
+    }
+
+    @Test func decadeScaleLabelsEveryTwoToNineMultiple() {
+        let labels = FrequencyScale.decade.gridlines.map(\.label)
+        #expect(labels == [
+            "20", "30", "40", "50", "60", "70", "80", "90",
+            "100", "200", "300", "400", "500", "600", "700", "800", "900",
+            "1k", "2k", "3k", "4k", "5k", "6k", "7k", "8k", "9k",
+            "10k", "20k",
+        ])
+    }
+
+    @Test func decadeMajorsAreExactlyTheDecadeBoundaries() {
+        let majors = FrequencyScale.decade.gridlines.filter(\.isMajor).map(\.hz)
+        #expect(majors == [100, 1000, 10_000])
+    }
+
+    @Test func everyScaleStaysWithinRangeAndAscending() {
+        for scale in FrequencyScale.allCases {
+            let hz = scale.gridlines.map(\.hz)
+            #expect(hz == hz.sorted())
+            #expect(hz.allSatisfy { $0 >= FrequencyAxis.minHz && $0 <= FrequencyAxis.maxHz })
+        }
+    }
+
+    @Test func labelFormatterUsesKNotationAtAndAbove1k() {
+        #expect(FrequencyAxis.label(forHz: 20) == "20")
+        #expect(FrequencyAxis.label(forHz: 500) == "500")
+        #expect(FrequencyAxis.label(forHz: 1000) == "1k")
+        #expect(FrequencyAxis.label(forHz: 2000) == "2k")
+        #expect(FrequencyAxis.label(forHz: 20_000) == "20k")
+    }
+}
+
 struct WaterfallColorMapTests {
 
     @Test func endpointsMatchCLAUDEMdExactly() {

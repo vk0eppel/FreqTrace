@@ -220,6 +220,15 @@ final class AudioPipelineViewModel {
         }
     }
 
+    /// Selectable frequency-axis scale (issue #25, FrequencyScale): Octave
+    /// (default) or a REW/Smaart-style Decade grid. Display-only -- it only
+    /// changes which axis labels/gridlines render, not any computed spectrum,
+    /// so unlike bandingResolution it needs no didSet recompute or pipeline
+    /// round-trip; @Observable tracking re-renders the labels on change. Not
+    /// persisted, matching the other graph-zone pills (bandingResolution,
+    /// displayMode); Appearance is the deliberate persisted exception.
+    var frequencyScale: FrequencyScale = .octave
+
     var weighting: Weighting = .default {
         didSet {
             guard weighting != oldValue else { return }
