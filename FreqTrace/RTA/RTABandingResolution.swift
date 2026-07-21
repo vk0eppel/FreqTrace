@@ -24,7 +24,18 @@
 import Foundation
 
 // nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
+//
+// Declaration order is UI order (the graph-zone picker iterates allCases):
+// None first, then 1/1 -> 1/48. `rawValue` is bars-per-octave and passed
+// straight into RTABinning as `barsPerOctave`, so `none`'s rawValue is 0 --
+// a sentinel meaning "no octave banding at all", handled by RTABinning as
+// raw per-FFT-bin resolution (the narrowband/FFT mode real analyzers offer
+// alongside fractional-octave), not a bar count. `none` sorts before `1/1`
+// as the user placed it, even though it's technically the *finest* (raw
+// bins), because it reads as the neutral "off" default the same way Time
+// Averaging's None does.
 nonisolated enum RTABandingResolution: Int, CaseIterable, Identifiable {
+    case none = 0
     case oneOverOne = 1
     case oneOverThree = 3
     case oneOverSix = 6
@@ -34,5 +45,5 @@ nonisolated enum RTABandingResolution: Int, CaseIterable, Identifiable {
 
     var id: Int { rawValue }
 
-    var label: String { "1/\(rawValue)" }
+    var label: String { self == .none ? "None" : "1/\(rawValue)" }
 }

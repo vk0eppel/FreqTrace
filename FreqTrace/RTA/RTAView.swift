@@ -76,33 +76,84 @@ struct RTAView: View {
                 // 1kHz, so evenly dividing the canvas by index drifted out
                 // of sync with the x-axis labels, which position by true
                 // frequency.
-                let positions = RTABarPositionCache.positions(barsPerOctave: barsPerOctave)
-                let gap: CGFloat = 2
+                let positions = RTABarPositionCache.positions(barsPerOctave: barsPerOctave, config: pipeline.config)
 
-                for (index, normalized) in displayedBars.enumerated() {
-                    guard index < positions.count else { break }
-                    let position = positions[index]
-                    let xStart = position.start * size.width
-                    let xEnd = position.end * size.width
-                    let barWidth = max(1, xEnd - xStart - gap)
-                    let barHeight = size.height * CGFloat(normalized)
-                    let rect = CGRect(x: xStart, y: size.height - barHeight, width: barWidth, height: barHeight)
-                    let path = Path(roundedRect: rect, cornerSize: CGSize(width: 2, height: 2))
-                    context.fill(path, with: .color(theme.accent))
-
-                    if let peak = pipeline.peakForRTABar(index) {
-                        let peakY = size.height - size.height * CGFloat(peak)
-                        var peakLine = Path()
-                        peakLine.move(to: CGPoint(x: xStart, y: peakY))
-                        peakLine.addLine(to: CGPoint(x: xStart + barWidth, y: peakY))
-                        context.stroke(peakLine, with: .color(theme.text), lineWidth: 2)
-                    }
+                if barsPerOctave <= 0 {
+                    // None/narrowband: ~one bar per FFT bin (thousands).
+                    // Drawing that many individual rounded-rect fills +
+                    // per-bar peak strokes every frame pegged the CPU at
+                    // ~150% (user report). Collapse it to a single filled
+                    // spectrum envelope + one peak polyline -- two draw calls
+                    // instead of thousands, and the continuous curve real
+                    // narrowband analyzers draw anyway.
+                    drawNarrowband(context: context, size: size, positions: positions)
+                } else {
+                    drawBars(context: context, size: size, positions: positions)
                 }
             }
             .onChange(of: timeline.date, initial: true) { _, newDate in
                 advanceSmoothing(to: newDate)
             }
         }
+    }
+
+    /// Octave/fractional-octave rendering: discrete rounded-rect bars with a
+    /// per-bar peak cap. Bar counts here are modest (<=~180 at 1/48 octave),
+    /// so per-bar draw calls are fine.
+    private func drawBars(context: GraphicsContext, size: CGSize, positions: [RTABarPositionCache.BarPosition]) {
+        let gap: CGFloat = 2
+        for (index, normalized) in displayedBars.enumerated() {
+            guard index < positions.count else { break }
+            let position = positions[index]
+            let xStart = position.start * size.width
+            let xEnd = position.end * size.width
+            let barWidth = max(1, xEnd - xStart - gap)
+            let barHeight = size.height * CGFloat(normalized)
+            let rect = CGRect(x: xStart, y: size.height - barHeight, width: barWidth, height: barHeight)
+            let path = Path(roundedRect: rect, cornerSize: CGSize(width: 2, height: 2))
+            context.fill(path, with: .color(theme.accent))
+
+            if let peak = pipeline.peakForRTABar(index) {
+                let peakY = size.height - size.height * CGFloat(peak)
+                var peakLine = Path()
+                peakLine.move(to: CGPoint(x: xStart, y: peakY))
+                peakLine.addLine(to: CGPoint(x: xStart + barWidth, y: peakY))
+                context.stroke(peakLine, with: .color(theme.text), lineWidth: 2)
+            }
+        }
+    }
+
+    /// None/narrowband rendering: one bar per FFT bin (thousands), drawn as a
+    /// single filled envelope through each bar's center plus one stroked
+    /// held-peak polyline -- two draw submissions total, versus thousands of
+    /// per-bar fills/strokes that saturated the CPU. The peak line breaks
+    /// into separate subpaths across any bars that have no recorded peak yet.
+    private func drawNarrowband(context: GraphicsContext, size: CGSize, positions: [RTABarPositionCache.BarPosition]) {
+        let count = min(displayedBars.count, positions.count)
+        guard count > 0 else { return }
+        func centerX(_ i: Int) -> CGFloat { CGFloat((positions[i].start + positions[i].end) / 2) * size.width }
+        func topY(_ v: Float) -> CGFloat { size.height - size.height * CGFloat(v) }
+
+        var envelope = Path()
+        envelope.move(to: CGPoint(x: centerX(0), y: size.height))
+        for i in 0..<count {
+            envelope.addLine(to: CGPoint(x: centerX(i), y: topY(displayedBars[i])))
+        }
+        envelope.addLine(to: CGPoint(x: centerX(count - 1), y: size.height))
+        envelope.closeSubpath()
+        context.fill(envelope, with: .color(theme.accent))
+
+        var peakPath = Path()
+        var penDown = false
+        for i in 0..<count {
+            if let peak = pipeline.peakForRTABar(i) {
+                let point = CGPoint(x: centerX(i), y: topY(peak))
+                if penDown { peakPath.addLine(to: point) } else { peakPath.move(to: point); penDown = true }
+            } else {
+                penDown = false
+            }
+        }
+        context.stroke(peakPath, with: .color(theme.text), lineWidth: 1)
     }
 
     // Reads AudioPipelineViewModel's cached per-hop bars (perf fix) rather
@@ -170,17 +221,28 @@ private enum RTABarPositionCache {
         let end: CGFloat
     }
 
-    private static var cache: [Int: [BarPosition]] = [:]
+    // Keyed by config too, not just barsPerOctave: the None (raw per-bin)
+    // case's positions depend on the FFT bin grid, so they'd go stale across
+    // an FFT-size change if cached by resolution alone. Octave resolutions
+    // ignore config in bandEdges, so their entry is still effectively one per
+    // resolution.
+    private struct Key: Hashable {
+        let barsPerOctave: Int
+        let windowSize: Int
+        let sampleRate: Double
+    }
+    private static var cache: [Key: [BarPosition]] = [:]
 
-    static func positions(barsPerOctave: Int) -> [BarPosition] {
-        if let cached = cache[barsPerOctave] { return cached }
-        let positions = RTABinning.bandEdges(barsPerOctave: barsPerOctave).map { edge in
+    static func positions(barsPerOctave: Int, config: AnalysisConfig) -> [BarPosition] {
+        let key = Key(barsPerOctave: barsPerOctave, windowSize: config.windowSize, sampleRate: config.sampleRate)
+        if let cached = cache[key] { return cached }
+        let positions = RTABinning.bandEdges(barsPerOctave: barsPerOctave, config: config).map { edge in
             BarPosition(
                 start: CGFloat(FrequencyAxis.normalizedPosition(forHz: edge.lowerHz)),
                 end: CGFloat(FrequencyAxis.normalizedPosition(forHz: edge.upperHz))
             )
         }
-        cache[barsPerOctave] = positions
+        cache[key] = positions
         return positions
     }
 }

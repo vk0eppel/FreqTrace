@@ -174,7 +174,7 @@ struct WaterfallZoneView: View {
             // RTABinning.bars for the same hop's data.
             let bars = pipeline.latestRTABars
             guard !bars.isEmpty else { return HoverReadout(hz: hz, db: nil) }
-            let edges = RTABinning.bandEdges(barsPerOctave: barsPerOctave)
+            let edges = RTABinning.bandEdges(barsPerOctave: barsPerOctave, config: pipeline.config)
             guard let index = edges.firstIndex(where: { hz >= $0.lowerHz && hz <= $0.upperHz }) else {
                 return HoverReadout(hz: hz, db: nil)
             }

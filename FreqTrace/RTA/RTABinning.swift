@@ -19,6 +19,46 @@ import os
 nonisolated enum RTABinning {
     static let defaultBarsPerOctave = 12
 
+    /// Upper bound on the number of display points the None/narrowband
+    /// resolution produces, regardless of FFT size (perf fix -- user report:
+    /// at 16k + Time Avg None + no banding "this is really hard on the cpu
+    /// and rta is stuttering like crazy"). One band per raw FFT bin is
+    /// ~3,400 points at 8k and ~6,800 at 16k, and every per-frame/per-hop
+    /// stage is O(points): the RTA's smoothing ease + envelope path + peak
+    /// lookups, and apply()'s per-bar peak-tracker writes -- run continuously
+    /// at display rate because Time Avg None never lets the display converge.
+    /// A screen can't resolve more points than it has pixels, so bins are
+    /// grouped into at most this many contiguous, peak-preserving bands
+    /// (max over each group, so no narrow peak is hidden) -- visually the
+    /// same continuous curve, with bounded cost. 1024 is comfortably finer
+    /// than any display width the app runs at (min window 1280pt) yet ~7x
+    /// cheaper than one-per-bin at 16k.
+    static let maxNarrowbandBars = 1024
+
+    /// Contiguous FFT-bin groups for the None/narrowband case, capped at
+    /// `maxNarrowbandBars`. Below the cap (small FFT sizes) each group is a
+    /// single bin -- true raw resolution; above it, bins are evenly grouped
+    /// so the display-point count stays bounded. Shared by both `bandEdges`
+    /// (positions) and `bars` (values) so their counts and ordering are
+    /// identical by construction. Bin 0 (DC) is excluded; only bins whose
+    /// center falls inside `[minHz, maxHz]` are grouped.
+    static func narrowbandBinGroups(config: AnalysisConfig, minHz: Double = FrequencyAxis.minHz, maxHz: Double = FrequencyAxis.maxHz) -> [(lowerBin: Int, upperBin: Int)] {
+        let binHz = config.sampleRate / Double(config.windowSize)
+        let maxBin = config.windowSize / 2 - 1
+        let firstBin = max(1, Int((minHz / binHz).rounded(.up)))
+        let lastBin = min(maxBin, Int((maxHz / binHz).rounded(.down)))
+        guard lastBin >= firstBin else { return [] }
+
+        let totalBins = lastBin - firstBin + 1
+        if totalBins <= maxNarrowbandBars {
+            return (firstBin...lastBin).map { ($0, $0) }
+        }
+        let groupSize = Int((Double(totalBins) / Double(maxNarrowbandBars)).rounded(.up))
+        return stride(from: firstBin, through: lastBin, by: groupSize).map { lo in
+            (lo, min(lo + groupSize - 1, lastBin))
+        }
+    }
+
     /// Memoizes bandEdges(barsPerOctave:) (perf fix -- user request "reduce
     /// CPU charge"): it's pure and only ever changes when the user picks a
     /// different RTABandingResolution, but was recomputed with fresh array
@@ -37,6 +77,11 @@ nonisolated enum RTABinning {
         let minHz: Double
         let maxHz: Double
         let referenceHz: Double
+        // Only meaningful for the None (raw per-bin) case, whose edges
+        // depend on the FFT bin grid; 0 for the octave case, where edges
+        // are pure frequency and config-independent.
+        let windowSize: Int
+        let sampleRate: Double
     }
     private static let bandEdgesCache = OSAllocatedUnfairLock<[BandEdgesCacheKey: [(lowerHz: Double, upperHz: Double)]]>(initialState: [:])
 
@@ -67,9 +112,34 @@ nonisolated enum RTABinning {
     /// index no longer maps 1:1 to log-frequency position the way it did
     /// under the old equal-slice scheme, since bar count here comes from
     /// independently rounding the steps up and down from 1kHz).
-    static func bandEdges(barsPerOctave: Int, minHz: Double = FrequencyAxis.minHz, maxHz: Double = FrequencyAxis.maxHz, referenceHz: Double = 1000) -> [(lowerHz: Double, upperHz: Double)] {
-        guard barsPerOctave > 0 else { return [] }
-        let key = BandEdgesCacheKey(barsPerOctave: barsPerOctave, minHz: minHz, maxHz: maxHz, referenceHz: referenceHz)
+    /// `barsPerOctave <= 0` selects the **None / narrowband** case: raw FFT
+    /// bins (no octave grouping), grouped only enough to stay under
+    /// `maxNarrowbandBars` (perf cap -- see `narrowbandBinGroups`). Needs
+    /// `config` for the bin grid and returns `[]` without it. Each band spans
+    /// its group's bins -- edges from the group's lowest bin's lower edge to
+    /// its highest bin's upper edge -- so bars/positions land on the same
+    /// log-frequency axis as the octave bands. Derived from the same
+    /// `narrowbandBinGroups` `bars` uses, so counts/ordering match by
+    /// construction and every consumer (bars, positioning, hover) stays
+    /// uniform with no per-consumer None branch.
+    static func bandEdges(barsPerOctave: Int, config: AnalysisConfig? = nil, minHz: Double = FrequencyAxis.minHz, maxHz: Double = FrequencyAxis.maxHz, referenceHz: Double = 1000) -> [(lowerHz: Double, upperHz: Double)] {
+        if barsPerOctave <= 0 {
+            guard let config else { return [] }
+            let key = BandEdgesCacheKey(barsPerOctave: 0, minHz: minHz, maxHz: maxHz, referenceHz: referenceHz, windowSize: config.windowSize, sampleRate: config.sampleRate)
+            if let cached = bandEdgesCache.withLock({ $0[key] }) { return cached }
+
+            let binHz = config.sampleRate / Double(config.windowSize)
+            let edges = narrowbandBinGroups(config: config, minHz: minHz, maxHz: maxHz).map { group -> (lowerHz: Double, upperHz: Double) in
+                let lowerHz = Double(group.lowerBin) * binHz - binHz / 2
+                let upperHz = Double(group.upperBin) * binHz + binHz / 2
+                return (lowerHz, upperHz)
+            }
+
+            bandEdgesCache.withLock { $0[key] = edges }
+            return edges
+        }
+
+        let key = BandEdgesCacheKey(barsPerOctave: barsPerOctave, minHz: minHz, maxHz: maxHz, referenceHz: referenceHz, windowSize: 0, sampleRate: 0)
         if let cached = bandEdgesCache.withLock({ $0[key] }) { return cached }
 
         let step = 1.0 / Double(barsPerOctave)
@@ -111,7 +181,7 @@ nonisolated enum RTABinning {
     /// FrequencyTracker.weightedLevelDb already uses for SPL) before
     /// MagnitudeScaling's -80/0dB floor/ceiling means anything.
     static func bars(magnitudes: [Float], config: AnalysisConfig, barsPerOctave: Int = defaultBarsPerOctave, fullScalePower: Float) -> [Float] {
-        guard barsPerOctave > 0, !magnitudes.isEmpty else { return [] }
+        guard !magnitudes.isEmpty else { return [] }
         let safeFullScalePower = max(fullScalePower, .leastNormalMagnitude)
 
         let binHz = config.sampleRate / Double(config.windowSize)
@@ -119,6 +189,22 @@ nonisolated enum RTABinning {
 
         func nearestBin(toHz hz: Double) -> Int {
             min(max(1, Int((hz / binHz).rounded())), maxBin)
+        }
+
+        // None / narrowband: raw FFT resolution, grouped only enough to stay
+        // under maxNarrowbandBars (perf cap). Each bar is the peak over its
+        // group's bins (so a narrow peak is never averaged away). Derived from
+        // the same narrowbandBinGroups bandEdges uses, so bar count and
+        // x-positions stay in lockstep.
+        if barsPerOctave <= 0 {
+            return narrowbandBinGroups(config: config).map { group in
+                let upper = min(group.upperBin, maxBin)
+                var peak: Float = 0
+                for bin in group.lowerBin...upper {
+                    peak = max(peak, magnitudes[bin])
+                }
+                return MagnitudeScaling.normalized(power: peak / safeFullScalePower)
+            }
         }
 
         let edges = bandEdges(barsPerOctave: barsPerOctave)
