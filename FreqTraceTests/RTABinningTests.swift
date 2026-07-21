@@ -150,4 +150,83 @@ struct RTABinningTests {
             #expect(bars[bar] > 0, "bar \(bar) (below 63Hz) should not be silent")
         }
     }
+
+    // MARK: - None / narrowband resolution (raw per-FFT-bin, no octave banding)
+
+    @Test func noneIsTheFirstBandingResolution() {
+        // Placed before 1/1, the neutral "off" default -- same ordering as
+        // TimeAveragingPreset.none.
+        #expect(RTABandingResolution.allCases.first == RTABandingResolution.none)
+        #expect(RTABandingResolution.none.rawValue == 0)
+        #expect(RTABandingResolution.none.label == "None")
+    }
+
+    @Test func noneResolutionBarCountMatchesEdgesAndIsFinerThanOctaveButCapped() {
+        let magnitudes = [Float](repeating: 0, count: config.windowSize / 2)
+        let none = RTABandingResolution.none.rawValue
+
+        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barsPerOctave: none, fullScalePower: 1)
+        let edges = RTABinning.bandEdges(barsPerOctave: none, config: config)
+
+        // Bars derive from the same narrowbandBinGroups the positioning uses,
+        // so counts must match exactly (out-of-bounds risk otherwise).
+        #expect(bars.count == edges.count)
+        // Far denser than the finest octave banding...
+        let finestOctaveCount = stepsDown(barsPerOctave: 48) + stepsUp(barsPerOctave: 48) + 1
+        #expect(bars.count > finestOctaveCount)
+        // ...but bounded by the narrowband perf cap regardless of FFT size.
+        #expect(bars.count <= RTABinning.maxNarrowbandBars)
+    }
+
+    @Test func noneResolutionIsCappedAtLargeFFTSizes() {
+        // 16k window: ~6,800 bins in [20Hz, 20kHz] one-per-bin, which pegged
+        // the CPU (user report). Must be grouped down to the cap.
+        let bigConfig = FFTWindowSize.n16384.config(sampleRate: 48_000)
+        let magnitudes = [Float](repeating: 0, count: bigConfig.windowSize / 2)
+        let none = RTABandingResolution.none.rawValue
+
+        let bars = RTABinning.bars(magnitudes: magnitudes, config: bigConfig, barsPerOctave: none, fullScalePower: 1)
+
+        #expect(bars.count <= RTABinning.maxNarrowbandBars)
+    }
+
+    @Test func noneResolutionEmptyMagnitudesProducesEmptyBars() {
+        let bars = RTABinning.bars(magnitudes: [], config: config, barsPerOctave: RTABandingResolution.none.rawValue, fullScalePower: 1)
+
+        #expect(bars.isEmpty)
+    }
+
+    @Test func noneResolutionBarReadsItsOwnBinMagnitude() {
+        var magnitudes = [Float](repeating: 0, count: config.windowSize / 2)
+        let binHz = config.sampleRate / Double(config.windowSize)
+        let toneBin = Int((2000 / binHz).rounded()) // 2kHz, comfortably in range
+        magnitudes[toneBin] = 1.0
+        let none = RTABandingResolution.none.rawValue
+
+        let bars = RTABinning.bars(magnitudes: magnitudes, config: config, barsPerOctave: none, fullScalePower: 1)
+        let edges = RTABinning.bandEdges(barsPerOctave: none, config: config)
+
+        let toneHz = Double(toneBin) * binHz
+        let barForTone = edges.firstIndex { toneHz >= $0.lowerHz && toneHz <= $0.upperHz }!
+        let loudest = bars.indices.max { bars[$0] < bars[$1] }!
+
+        #expect(loudest == barForTone)
+        #expect(bars[barForTone] > 0.9) // near full-scale after normalization
+        // Neighboring bins are silent -> their (single-bin) bars sit at the floor.
+        #expect(bars[barForTone - 1] == 0)
+        #expect(bars[barForTone + 1] == 0)
+    }
+
+    @Test func noneResolutionWaterfallSteppedMagnitudesReturnsRawSpectrum() {
+        // The waterfall path: None means no banding at all, so steppedMagnitudes
+        // hands back the raw per-bin spectrum untouched (what the waterfall
+        // showed before banding existed), not a piecewise-flat stepped version.
+        var magnitudes = [Float](repeating: 0, count: config.windowSize / 2)
+        magnitudes[500] = 1234
+        magnitudes[900] = 42
+
+        let stepped = RTABinning.steppedMagnitudes(magnitudes: magnitudes, config: config, barsPerOctave: RTABandingResolution.none.rawValue)
+
+        #expect(stepped == magnitudes)
+    }
 }

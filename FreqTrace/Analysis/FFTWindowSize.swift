@@ -56,7 +56,12 @@ nonisolated enum FFTWindowSize: Int, CaseIterable, Identifiable {
     /// vDSP FFT every ~43ms instead of ~171ms) is trivial. Sizes at or
     /// below 4096 keep their natural 50% overlap, already under the cap.
     var hopSize: Int { min(rawValue / 2, 2048) }
-    var label: String { String(rawValue) }
+    /// k-notation (1024 -> "1k" ... 16384 -> "16k") -- more compact and
+    /// scannable at a glance than the raw sample count, and consistent with
+    /// the k-notation the frequency axis already uses ("1k", "2k", ...
+    /// "16k", see FrequencyAxis.labeledBands). All sizes are exact
+    /// multiples of 1024, so this is always a whole number of "k".
+    var label: String { "\(rawValue / 1024)k" }
 
     static let `default`: FFTWindowSize = .n8192
 
