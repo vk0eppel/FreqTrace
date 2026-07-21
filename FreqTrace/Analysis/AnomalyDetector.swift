@@ -73,21 +73,38 @@ nonisolated enum HarmonicRelation {
     /// harmonic numbers, tight enough not to accidentally match unrelated
     /// peaks.
     static let toleranceRatio = 0.03
-    static let maxHarmonic = 8
 
     /// True if `candidate` looks like a harmonic of any `other` peak, or
     /// any `other` peak looks like a harmonic of `candidate` (i.e.
     /// `candidate` is itself a fundamental with a detected harmonic) --
     /// either direction means this is part of a normal harmonic series
     /// (a musical note), not an isolated anomalous tone.
+    ///
+    /// Recognizes a harmonic at *any* integer multiple, not a fixed low cap
+    /// (was 2...8, `maxHarmonic`): a strong tone's higher harmonics (>8th)
+    /// were otherwise treated as unrelated and flagged as phantom Anomaly
+    /// Candidates -- e.g. a 1250Hz tone with a little chain distortion lit up
+    /// its 11th/13th harmonics (13750/16250Hz) as anomalies (user report).
+    /// The nearest-integer-ratio test below has no upper bound, so every
+    /// harmonic present is excluded. Tradeoff (ADR 0001, judgment call): with
+    /// the same 3% tolerance a genuine independent tone that happens to sit
+    /// within 3% of an integer multiple of another *present* peak is also
+    /// excluded -- rare, since it needs an actual peak at the sub-multiple.
     static func isHarmonicallyRelated(_ candidate: SpectralPeak, to others: [SpectralPeak]) -> Bool {
         for other in others where other.bin != candidate.bin {
-            for n in 2...maxHarmonic {
-                if isNear(candidate.frequencyHz, Double(n) * other.frequencyHz) { return true }
-                if isNear(other.frequencyHz, Double(n) * candidate.frequencyHz) { return true }
-            }
+            if isHarmonic(candidate.frequencyHz, of: other.frequencyHz) { return true }
+            if isHarmonic(other.frequencyHz, of: candidate.frequencyHz) { return true }
         }
         return false
+    }
+
+    /// True if `frequency` is within tolerance of an integer multiple (>= 2)
+    /// of `fundamental`.
+    private static func isHarmonic(_ frequency: Double, of fundamental: Double) -> Bool {
+        guard fundamental > 0 else { return false }
+        let n = (frequency / fundamental).rounded()
+        guard n >= 2 else { return false }
+        return isNear(frequency, n * fundamental)
     }
 
     private static func isNear(_ a: Double, _ b: Double) -> Bool {

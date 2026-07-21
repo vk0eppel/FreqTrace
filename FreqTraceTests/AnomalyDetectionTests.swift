@@ -83,6 +83,30 @@ struct HarmonicRelationTests {
 
         #expect(!HarmonicRelation.isHarmonicallyRelated(b, to: [a, b]))
     }
+
+    // Regression (user report): a 1250Hz tone's higher harmonics were flagged
+    // as phantom Anomaly Candidates because the old 2...8 cap didn't recognize
+    // anything above the 8th harmonic. High harmonics must now count as
+    // related in either direction.
+    @Test func harmonicsAboveTheEighthAreStillRecognized() {
+        let fundamental = peak(bin: 1, hz: 1250)
+        let eleventh = peak(bin: 11, hz: 13750)
+        let thirteenth = peak(bin: 13, hz: 16250)
+        let all = [fundamental, eleventh, thirteenth]
+
+        #expect(HarmonicRelation.isHarmonicallyRelated(eleventh, to: all))
+        #expect(HarmonicRelation.isHarmonicallyRelated(thirteenth, to: all))
+        // And the fundamental is related to them (a detected harmonic above it).
+        #expect(HarmonicRelation.isHarmonicallyRelated(fundamental, to: all))
+    }
+
+    @Test func aHighNonIntegerMultipleIsStillUnrelated() {
+        let fundamental = peak(bin: 1, hz: 1250)
+        // 13100Hz = 10.48x, not near any integer multiple -> genuinely unrelated.
+        let stray = peak(bin: 2, hz: 13100)
+
+        #expect(!HarmonicRelation.isHarmonicallyRelated(stray, to: [fundamental, stray]))
+    }
 }
 
 struct AnomalyDetectorTests {

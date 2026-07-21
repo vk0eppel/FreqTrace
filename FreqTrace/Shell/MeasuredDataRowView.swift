@@ -138,6 +138,8 @@ struct MeasuredDataRowView: View {
             Text(formattedAnomalyFrequency(candidate.frequencyHz))
                 .font(.system(size: fontSize, weight: .semibold, design: .monospaced))
                 .foregroundStyle(theme.danger.opacity(colorOpacity))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .onAppear {
             guard isHighest, !reduceMotion else { return }
@@ -148,7 +150,11 @@ struct MeasuredDataRowView: View {
     }
 
     private func formattedAnomalyFrequency(_ hz: Double) -> String {
-        hz >= 1000 ? String(format: "%.2f kHz", hz / 1000) : String(format: "%.0f Hz", hz)
+        // Whole Hz, no kHz abbreviation -- reads the same way as the Tracked
+        // Frequency hero (MeasuredReading.frequency), e.g. "16250 Hz" not
+        // "16.25 kHz" (user request), so the two readouts are directly
+        // comparable at a glance.
+        String(format: "%.0f Hz", hz)
     }
 
     private func peakLabel(_ text: String) -> some View {
@@ -173,10 +179,13 @@ struct MeasuredDataRowView: View {
     /// onAppear to a hidden view and could kick off a redundant pulse
     /// animation for no visible row.
     private var anomalyCandidatesReference: some View {
+        // 5 digits ("00000 Hz") reserves width up to Nyquist (24000 Hz),
+        // matching the Tracked Frequency reference -- a 4-digit reference made
+        // 5-digit candidates like "16250 Hz" wrap (user report).
         VStack(alignment: .leading, spacing: 6) {
-            Text("0000 Hz").font(.system(size: 22, weight: .semibold, design: .monospaced))
-            Text("0000 Hz").font(.system(size: 18, weight: .semibold, design: .monospaced))
-            Text("0000 Hz").font(.system(size: 15, weight: .semibold, design: .monospaced))
+            Text("00000 Hz").font(.system(size: 22, weight: .semibold, design: .monospaced))
+            Text("00000 Hz").font(.system(size: 18, weight: .semibold, design: .monospaced))
+            Text("00000 Hz").font(.system(size: 15, weight: .semibold, design: .monospaced))
         }
     }
 
