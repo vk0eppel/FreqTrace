@@ -77,6 +77,7 @@ struct WaterfallZoneView: View {
             hoverOverlay
             displayModeToggle
             bandingResolutionControl
+            frequencyScaleControl
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
@@ -253,6 +254,50 @@ struct WaterfallZoneView: View {
         }
     }
 
+    // Frequency-scale picker (issue #25): Octave vs the REW/Smaart-style
+    // Decade grid. A display-only choice affecting the axis labels of both
+    // the waterfall and RTA, so it lives in the graph zone (like the banding
+    // picker) and shows regardless of displayMode. Stacked just below the
+    // banding control; placement confirmed by screenshot.
+    private var frequencyScaleControl: some View {
+        VStack {
+            HStack {
+                Spacer()
+                HStack(spacing: 4) {
+                    ForEach(FrequencyScale.allCases) { scale in
+                        frequencyScaleButton(scale)
+                    }
+                }
+                .padding(3)
+                .background(
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(theme.surfaceRaised.opacity(0.9))
+                )
+                .padding(.trailing, 10)
+            }
+            .padding(.top, 86)
+            Spacer()
+        }
+    }
+
+    private func frequencyScaleButton(_ scale: FrequencyScale) -> some View {
+        let isSelected = pipeline.frequencyScale == scale
+        return Button {
+            pipeline.frequencyScale = scale
+        } label: {
+            Text(scale.label)
+                .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
+                .foregroundStyle(isSelected ? theme.bg : theme.textDim)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isSelected ? theme.accent : Color.clear)
+                )
+        }
+        .buttonStyle(.plain)
+    }
+
     private func bandingResolutionButton(_ resolution: RTABandingResolution) -> some View {
         let isSelected = pipeline.bandingResolution == resolution
         return Button {
@@ -371,17 +416,32 @@ struct WaterfallZoneView: View {
     // just an approximate label placement.
     private var frequencyAxisLabels: some View {
         GeometryReader { proxy in
-            ForEach(FrequencyAxis.labeledBands, id: \.hz) { band in
-                let x = proxy.size.width * FrequencyAxis.normalizedPosition(forHz: band.hz)
+            // Two line weights (issue #25): major reference lines (octave
+            // centers, or a decade grid's 100/1k/10k) read boldest; the
+            // decade scale's minor 2-9 lines recede. Gridlines/labels sit at
+            // the true normalizedPosition -- no inset -- so they stay aligned
+            // with the RTA bars, which position by the same mapping.
+            ForEach(pipeline.frequencyScale.gridlines, id: \.hz) { line in
+                let x = proxy.size.width * FrequencyAxis.normalizedPosition(forHz: line.hz)
                 Rectangle()
-                    .fill(theme.text.opacity(0.12))
-                    .frame(width: 1)
+                    .fill(theme.text.opacity(line.isMajor ? 0.18 : 0.08))
+                    .frame(width: line.isMajor ? 1.5 : 1)
                     .position(x: x, y: proxy.size.height / 2)
-                axisLabel(band.label)
-                    .position(x: x, y: proxy.size.height - 12)
+                // The decade scale's extreme labels (20 at x~0, 20k at x~1)
+                // would clip against this view's .clipped() edge -- same
+                // symptom the time axis fixed. Nudge only the endpoint pills'
+                // center inward (~half a pill width) so the number stays
+                // readable, without moving the gridline (keeps bar alignment).
+                axisLabel(line.label)
+                    .position(x: min(max(x, endpointLabelInset), proxy.size.width - endpointLabelInset),
+                              y: proxy.size.height - 12)
             }
         }
     }
+
+    /// Horizontal half-pill margin used only to keep the first/last axis
+    /// labels from clipping at the view edges (see frequencyAxisLabels).
+    private let endpointLabelInset: CGFloat = 18
 
     // Inset top/bottom (user report: "first/last value mainly out of
     // screen"): the oldest ("-15s") and newest ("now") gridlines used to map
