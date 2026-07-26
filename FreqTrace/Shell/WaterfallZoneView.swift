@@ -159,6 +159,14 @@ struct WaterfallZoneView: View {
         switch displayMode {
         case .waterfall:
             guard let waterfallRenderer else { return HoverReadout(hz: hz, db: nil) }
+            // Establish an @Observable dependency on the per-hop stream so the
+            // tooltip re-renders as data scrolls under a *stationary* cursor
+            // (user report: freq/level didn't update unless the mouse moved).
+            // magnitudeDb() reads the renderer's own CPU mirror, which isn't
+            // Observable, so without this touch SwiftUI never re-evaluates the
+            // overlay between mouse moves. The RTA branch below already gets
+            // this for free by reading pipeline.latestRTABars.
+            _ = pipeline.latestMagnitudes.count
             // Inverse of timeAxisLabels' own topInset/bottomInset mapping,
             // so the tooltip's time position matches the gridlines exactly.
             let topInset: CGFloat = 12

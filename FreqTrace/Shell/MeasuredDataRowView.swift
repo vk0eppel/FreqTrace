@@ -57,11 +57,25 @@ struct MeasuredDataRowView: View {
                         numberSize: Typography.heroSize,
                         referenceNumber: "24000"
                     )
-                    fixedHeight(reference: peakLabelReference) {
-                        if let peak = trackedFrequencyViewModel.formattedTrackedFrequencyLevelPeak {
-                            peakLabel(peak)
+                    // Live level in a fixed-width trailing box (widest
+                    // "-100 dB" reserved, real value overlaid trailing-
+                    // aligned) so the "dB" unit stays anchored and only the
+                    // leading digits shift -- same as the hero/SPL
+                    // readingValue (user request: "the dB.. part does not
+                    // move each time the level changes"). No PEAK here: the
+                    // tracked frequency wanders, so a held peak of its level
+                    // isn't anchored to any one frequency -- this readout is
+                    // deliberately instantaneous (Peak reconsideration).
+                    Text("-100 dB")
+                        .font(.system(size: trackedLevelSize, weight: .medium, design: .monospaced))
+                        .hidden()
+                        .overlay(alignment: .trailing) {
+                            if let level = trackedFrequencyViewModel.formattedTrackedFrequencyLevel {
+                                Text(level)
+                                    .font(.system(size: trackedLevelSize, weight: .medium, design: .monospaced))
+                                    .foregroundStyle(theme.text)
+                            }
                         }
-                    }
                 }
             }
             dataBlock(label: "ANOMALY CANDIDATES") {
@@ -170,6 +184,10 @@ struct MeasuredDataRowView: View {
         Text("PEAK -100 dB")
             .font(.system(size: Typography.subCaptionSize, weight: .medium, design: .monospaced))
     }
+
+    /// The live level reads a little larger than PEAK (user request) so the
+    /// current value stands out over the held peak beside it.
+    private var trackedLevelSize: CGFloat { 14 }
 
     /// Height reference for the Anomaly Candidates area -- three rows at
     /// each rank's real font size/spacing, so the block always reserves

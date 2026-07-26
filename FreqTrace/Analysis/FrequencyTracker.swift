@@ -141,13 +141,18 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
         return (Double(bestBin) + offset) * binHz
     }
 
-    /// The level (dB) of whichever bin trackedFrequency(fromMagnitudes:
+    /// The level (dBFS) of whichever bin trackedFrequency(fromMagnitudes:
     /// weighting:) would pick as the winner (ticket #12, CONTEXT.md "Peak"
     /// -- "Tracked Frequency level"). Distinct from SPL, which sums level
     /// across the whole weighted spectrum rather than reporting one bin's.
+    /// Referenced to fullScalePower (full-scale = 0 dBFS, floored at -120)
+    /// exactly like weightedLevelDb / MagnitudeScaling, so it reads on the
+    /// same scale as SPL, the RTA bars, and the hover tooltip -- not raw,
+    /// unreferenced FFT-power dB.
     func trackedFrequencyLevelDb(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Double? {
         guard let bestBin = bestWeightedBin(fromMagnitudes: magnitudes, weighting: weighting) else { return nil }
-        return Double(MagnitudeScaling.decibels(power: magnitudes[bestBin]))
+        guard fullScalePower > 0 else { return -Double.infinity }
+        return Double(MagnitudeScaling.decibels(power: magnitudes[bestBin] / fullScalePower))
     }
 
     /// Applies `weighting`'s per-bin gain across the whole spectrum

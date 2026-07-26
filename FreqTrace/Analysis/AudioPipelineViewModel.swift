@@ -176,13 +176,11 @@ final class AudioPipelineViewModel {
     /// waterfall branch.
     enum PeakKey: Hashable {
         case spl
-        case trackedFrequencyLevel
         case rtaBar(Int)
     }
     private var peakTracker = PeakHoldTracker<PeakKey>()
 
     var splPeakDb: Float? { peakTracker.peak(for: .spl) }
-    var trackedFrequencyLevelPeakDb: Float? { peakTracker.peak(for: .trackedFrequencyLevel) }
     func peakForRTABar(_ index: Int) -> Float? { peakTracker.peak(for: .rtaBar(index)) }
 
     /// The manual reset (AC: "A manual reset control clears all held
@@ -967,15 +965,12 @@ final class AudioPipelineViewModel {
         if result.splDb.isFinite {
             peakTracker.update(Float(result.splDb), for: .spl)
         }
-        if result.trackedFrequencyLevelDb.isFinite {
-            peakTracker.update(Float(result.trackedFrequencyLevelDb), for: .trackedFrequencyLevel)
-        }
         // Computed here (every hop, regardless of whether RTA is the
         // currently-visible view) rather than from RTAView's onChange, so
-        // RTA bar peaks accumulate continuously like SPL/Tracked Frequency
-        // level's peaks -- Peak hold is supposed to be indefinite
-        // (CONTEXT.md "Peak"), not paused whenever the tech is looking at
-        // the waterfall instead (found by code review).
+        // RTA bar peaks accumulate continuously like SPL's peak -- Peak
+        // hold is supposed to be indefinite (CONTEXT.md "Peak"), not paused
+        // whenever the tech is looking at the waterfall instead (found by
+        // code review).
         let bars = RTABinning.bars(magnitudes: result.magnitudes, config: config, barsPerOctave: bandingResolution.rawValue, fullScalePower: result.fullScalePower)
         latestRTABars = bars
         for (index, value) in bars.enumerated() {
@@ -1077,8 +1072,15 @@ final class AudioPipelineViewModel {
         return "PEAK \(Int((splPeakDb + Float(splOffsetDb)).rounded())) dB"
     }
 
-    var formattedTrackedFrequencyLevelPeak: String? {
-        guard let trackedFrequencyLevelPeakDb, trackedFrequencyLevelPeakDb.isFinite else { return nil }
-        return "PEAK \(Int(trackedFrequencyLevelPeakDb.rounded())) dB"
+    /// Live level of the currently-tracked bin (updates every hop, same as
+    /// the Hz hero). No held-peak counterpart: the tracked frequency wanders,
+    /// so a peak of its level wouldn't be anchored to any one frequency
+    /// (unlike SPL's whole-spectrum peak or a fixed RTA band's peak) -- an
+    /// instantaneous readout, deliberately, per the Peak reconsideration.
+    /// nil before any finite level is read, so it's omitted rather than
+    /// showing a placeholder dash.
+    var formattedTrackedFrequencyLevel: String? {
+        guard let trackedFrequencyLevelDb, trackedFrequencyLevelDb.isFinite else { return nil }
+        return "\(Int(trackedFrequencyLevelDb.rounded())) dB"
     }
 }

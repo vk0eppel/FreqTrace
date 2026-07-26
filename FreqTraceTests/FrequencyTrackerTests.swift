@@ -250,6 +250,19 @@ struct FrequencyTrackerTests {
         #expect(loudLevel > quietLevel)
     }
 
+    @Test func trackedFrequencyLevelIsReferencedToFullScale() throws {
+        // Referenced to fullScalePower (dBFS), not raw FFT-power dB: a
+        // near-full-scale tone reads close to 0 dBFS and never above it,
+        // on the same scale as SPL / the RTA bars / the hover tooltip.
+        let tracker = FrequencyTracker(config: config)
+        let loud = sineWave(frequency: 1000, amplitude: 0.9, sampleRate: config.sampleRate, count: config.windowSize)
+        let magnitudes = try #require(tracker.spectrum(in: loud))
+
+        let level = try #require(tracker.trackedFrequencyLevelDb(fromMagnitudes: magnitudes, weighting: .z))
+        #expect(level <= 0)
+        #expect(level > -20)
+    }
+
     @Test func trackedFrequencyLevelIsNilWhenSpectrumHasOnlyTheDCBin() {
         // Mirrors trackedFrequency(fromMagnitudes:weighting:)'s own nil
         // case: bin 0 (DC) is skipped as not a meaningful frequency, so a
