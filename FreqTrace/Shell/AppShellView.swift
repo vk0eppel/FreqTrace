@@ -63,6 +63,17 @@ struct AppShellView: View {
             ControlsRowView()
         }
         .background(theme.bg)
+        // Pin the hosting window's NSAppearance to the chosen Appearance Mode
+        // (ADR 0005: manual, deliberately independent of system appearance).
+        // Without this, every SwiftUI element that doesn't set an explicit
+        // theme color -- default TextField text, Menu labels, disclosure
+        // chevrons, control tints -- resolves its *semantic* color against the
+        // OS appearance instead, so on a Dark-mode Mac they came out near-white
+        // and vanished in the app's Light mode (blank OFFSET field, missing
+        // Output device name, missing Input chevron). Pinning also fixes the
+        // window chrome (title bar / traffic lights), which otherwise stayed
+        // dark in Light mode.
+        .background(WindowAppearanceApplier(mode: theme.mode))
         .frame(minWidth: LayoutMetrics.minWindowWidth, minHeight: LayoutMetrics.minWindowHeight)
         .environment(\.theme, theme)
         .environment(trackedFrequencyViewModel)
@@ -173,6 +184,26 @@ struct AppShellView: View {
             NSEvent.removeMonitor(clickAwayMonitor)
         }
         clickAwayMonitor = nil
+    }
+}
+
+// Applies the app's manual Appearance Mode to the hosting NSWindow's
+// appearance, so SwiftUI's semantic colors (default control text, Menu
+// labels, chevrons) and the window chrome resolve against the chosen mode
+// rather than the OS's. Kept as a zero-size background view: it needs an
+// NSView only to reach `.window`, and updateNSView re-runs on every mode
+// change. The set is deferred to the next runloop turn because the view may
+// not be attached to its window yet on the first update.
+private struct WindowAppearanceApplier: NSViewRepresentable {
+    let mode: AppearanceMode
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        let name: NSAppearance.Name = mode == .light ? .aqua : .darkAqua
+        DispatchQueue.main.async {
+            nsView.window?.appearance = NSAppearance(named: name)
+        }
     }
 }
 

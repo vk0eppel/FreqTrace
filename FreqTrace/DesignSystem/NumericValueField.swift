@@ -38,6 +38,15 @@ struct NumericValueField: View {
         HStack(spacing: 4) {
             TextField("value", text: $text)
                 .textFieldStyle(.plain)
+                // Explicit theme color, not the inherited default: a plain
+                // TextField with no foreground resolves the *system* label
+                // color, which tracks the OS appearance rather than the app's
+                // manual Appearance Mode -- on a Dark-mode Mac that's near-white
+                // and vanished on the app's Light background (the SPL OFFSET
+                // field was invisible in Light mode; the generator's Level/Hz
+                // fields only escaped because their cluster sets .foregroundStyle
+                // on the whole HStack). See also WindowAppearanceApplier.
+                .foregroundStyle(theme.text)
                 .multilineTextAlignment(.trailing)
                 .frame(width: width)
                 .focused($isFocused)
