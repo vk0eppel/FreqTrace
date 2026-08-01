@@ -351,11 +351,18 @@ struct WaterfallZoneView: View {
     // display keeps its last frame (non-empty) so freezing never shows it.
     // Non-interactive, so it doesn't block the toggles or hover.
     private var emptyStateOverlay: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 22) {
+            // The app's identity moment before data flows (design review). Was a
+            // 220x6 hairline that read as an incidental loading bar; enlarged
+            // into a real ramp swatch of the waterfall's own WaterfallColorMap
+            // so the empty state carries the app's character instead of floating
+            // in a void. A soft accent glow lifts it off the background.
+            // Deliberately restrained -- no wordmark (the title bar already
+            // names the app), no motion.
             spectralStrip
-                .frame(width: 220, height: 6)
-                .clipShape(Capsule())
-                .opacity(0.85)
+                .frame(width: 380, height: 16)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .shadow(color: theme.accent.opacity(0.25), radius: 16, y: 0)
             // While a Start is in progress (between the press and the first
             // hop -- possibly a slow coreaudiod start) show "Starting…" so the
             // empty state reads as working, not idle. Otherwise the usual
@@ -373,7 +380,7 @@ struct WaterfallZoneView: View {
                     }
                 }
             }
-            .font(.system(size: Typography.controlSize, weight: .medium))
+            .font(.system(size: Typography.controlSize + 2, weight: .medium))
             .foregroundStyle(theme.textDim)
         }
         .allowsHitTesting(false)

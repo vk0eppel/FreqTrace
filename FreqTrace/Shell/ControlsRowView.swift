@@ -214,6 +214,10 @@ struct ControlsRowView: View {
             } label: {
                 Text(selectedOutputDeviceName)
                     .font(.system(size: Typography.controlSize, weight: .medium))
+                    // Explicit theme color -- an unstyled Menu label inherits
+                    // the system appearance's label color, which disappeared in
+                    // manual Light mode on a Dark-mode Mac (device name blank).
+                    .foregroundStyle(theme.text)
                     .lineLimit(1)
             }
             .fixedSize()
