@@ -39,7 +39,7 @@ Two consequences the corpus is designed to force:
 | # | Case | Source | Pass = | Realism needed |
 |---|------|--------|--------|----------------|
 | 5 | **Steady sine test tone** (flat from switch-on) — *the anchoring bug* | Synthetic pure sine, constant level | **Zero flags, ever** (structurally excluded — never rose) | Exact |
-| 6 | **Settled room mode** (post-bloom, steady/decaying) — *tail of case 4* | Synthetic (later phase of #4) | Zero flags once settled; case-4 flag must **clear** as it settles | Same signal, later phase |
+| 6 | **Settled room mode** (post-bloom, **decaying**) — *tail of case 4* | Synthetic (later phase of #4) | Zero flags once it **rings down**; case-4 flag must **clear** as it decays. **Softened by #21** (fall-away-only release): a mode that settles to *perfectly* flat rather than decaying may keep flagging — an accepted edge within the relaxed bar; fluctuation-detection is the documented lever to tighten it | Same signal, later phase — the **decaying** tail specifically |
 | 7 | **Hand-ramped test tone** (manual level ramp) — *challenge case* | Synthetic slow/crude ramp + optional **real** "riding the fader" capture | **Zero flags** — criteria must tell a crude manual ramp from feedback's exponential lock-and-hold | Slow, crude ramp shape distinct from an exponential lock |
 | 8 | **Sustained musical content** — held note / organ drone / synth pad | **Real** recording (synthesis misses vibrato/beating/harmonics) | Zero flags | Real, with natural vibrato/beating and full harmonic series |
 | 9 | **Broadband program material** — live music mix + speech | **Real** recording | **Small documented false-flag rate** allowed (not zero) | Real, dense |
