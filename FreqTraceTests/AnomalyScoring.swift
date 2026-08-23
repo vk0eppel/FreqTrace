@@ -86,11 +86,20 @@ nonisolated struct CorpusScorer {
     /// AnomalyDetectionTests convention -- low enough that a moderate tone
     /// stands far above PeakFinder's 6 dB prominence gate.
     let floorPower: Float
+    /// The level (dBFS) at which the target counts as "a findable narrowband
+    /// peak" for the latency measurement. `nil` = the #34 default (PeakFinder
+    /// on the synthetic spectrum, which fires as soon as the tone clears the
+    /// 1e-8 floor -- detectable almost immediately). Setting a realistic
+    /// value (e.g. -25 dBFS) makes latency measure real climb-into-view time,
+    /// which the ~500 ms bar actually gates -- the upgrade the #34 baseline
+    /// doc flagged for #36.
+    let detectabilityFloorDb: Float?
 
-    init(config: AnalysisConfig, endWindowHops: Int = 5, floorPower: Float = 1e-8) {
+    init(config: AnalysisConfig, endWindowHops: Int = 5, floorPower: Float = 1e-8, detectabilityFloorDb: Float? = nil) {
         self.config = config
         self.endWindowHops = endWindowHops
         self.floorPower = floorPower
+        self.detectabilityFloorDb = detectabilityFloorDb
     }
 
     /// A candidate/peak matches the target within a couple bins or 3%,
@@ -100,6 +109,11 @@ nonisolated struct CorpusScorer {
         return abs(hz - target) <= tol
     }
 
+    /// The FFT bin the case's target tone lands in.
+    private func targetBin(for testCase: CorpusCase) -> Int {
+        Int((testCase.targetHz / config.binResolutionHz).rounded())
+    }
+
     /// The magnitude spectrum the FFT would produce at `hop`: a flat floor
     /// with the target bin raised to the envelope's mean power over the
     /// windowSize samples ending at this hop (zero before the signal
@@ -107,7 +121,7 @@ nonisolated struct CorpusScorer {
     /// power a real FFT integrates.
     func spectrum(for testCase: CorpusCase, hop: Int) -> [Float] {
         let binCount = config.windowSize / 2
-        let targetBin = Int((testCase.targetHz / config.binResolutionHz).rounded())
+        let targetBin = targetBin(for: testCase)
         var magnitudes = [Float](repeating: floorPower, count: binCount)
         guard targetBin > 0, targetBin < binCount else { return magnitudes }
 
@@ -144,9 +158,17 @@ nonisolated struct CorpusScorer {
             let magnitudes = spectrum(for: testCase, hop: hop)
 
             if firstDetectableHop == nil {
-                let peaks = PeakFinder.findPeaks(magnitudes: magnitudes, config: config)
-                if peaks.contains(where: { matches($0.frequencyHz, testCase.targetHz) }) {
-                    firstDetectableHop = hop
+                if let floorDb = detectabilityFloorDb {
+                    let bin = targetBin(for: testCase)
+                    if bin > 0, bin < magnitudes.count,
+                       MagnitudeScaling.decibels(power: magnitudes[bin]) >= floorDb {
+                        firstDetectableHop = hop
+                    }
+                } else {
+                    let peaks = PeakFinder.findPeaks(magnitudes: magnitudes, config: config)
+                    if peaks.contains(where: { matches($0.frequencyHz, testCase.targetHz) }) {
+                        firstDetectableHop = hop
+                    }
                 }
             }
 
