@@ -1,5 +1,15 @@
 # Anomaly Criteria — Prototype Results (ticket #36)
 
+> **Retired (#38).** The throwaway prototype + synthetic-corpus harness this doc
+> describes (`PrototypeAnomalyDetector`, `AnomalyCorpus`, `AnomalyScoring`, and
+> their tests) were removed once the criteria shipped into the production
+> `AnomalyDetector`. This doc stays as the historical record of how the criteria
+> were derived; the shipped detector is covered by `AnomalyDetectionTests` and
+> validated on real signals by `scripts/hcms-validate/`. The real-signal retune
+> ([anomaly-hcms-validation.md](./anomaly-hcms-validation.md)) later corrected two
+> of the conclusions below (binary→Sabine gate, −25→−45 floor).
+
+
 The [reworked criteria](./anomaly-criteria.md) (#21) prototyped and scored against
 the [synthetic corpus](./anomaly-validation-corpus.md), to pin the threshold
 *intents* the spec deferred — "validated, not hand-tuned blind."

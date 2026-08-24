@@ -1,16 +1,19 @@
 # HCMS real-signal validation
 
-Scores the throwaway anomaly-detection prototype (`FreqTraceTests/PrototypeAnomalyDetector.swift`)
-against **real** howling-corrupted audio, to check the synthetic-tuned criteria
-(#36) against real feedback. Findings + interpretation:
+Scores the **production** `AnomalyDetector` (`FreqTrace/Analysis/AnomalyDetector.swift`)
+against **real** howling-corrupted audio, confirming the shipped detector
+reproduces the retune's ~55% detection at ~0% false-alarm. Findings +
+interpretation:
 [`docs/research/anomaly-hcms-validation.md`](../../docs/research/anomaly-hcms-validation.md).
+(The throwaway prototype + synthetic-corpus sweep this script originally drove
+were retired in #38 once the criteria shipped.)
 
 ## Why a standalone script (not a unit test)
 
 The app has `ENABLE_APP_SANDBOX=YES`, so a hosted `xctest` can't read external
-audio files. This compiles the pure DSP sources + the prototype into a
-standalone, non-sandboxed binary via `swiftc` and runs the analysis offline. It
-is a one-off validation, not a regression test.
+audio files. This compiles the production DSP sources into a standalone,
+non-sandboxed binary via `swiftc` and runs the analysis offline. It is a one-off
+validation, not a CI regression test (it needs the manually-fetched dataset).
 
 ## Usage
 

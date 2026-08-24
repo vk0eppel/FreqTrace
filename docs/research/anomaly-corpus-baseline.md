@@ -1,5 +1,13 @@
 # Anomaly Detector — Baseline Scorecard (ticket #34)
 
+> **Retired (#38).** The synthetic corpus + scoring harness this doc describes
+> were removed once the reworked criteria shipped into the production
+> `AnomalyDetector`. Kept as the historical record of the "old detector, 5/7"
+> baseline that motivated the rethink. The regenerate instruction below no longer
+> applies (the test was removed); see `AnomalyDetectionTests` and
+> `scripts/hcms-validate/` for the shipped detector's coverage.
+
+
 The synthetic tier of the [validation corpus](./anomaly-validation-corpus.md)
 (map #18) scored against **today's** `AnomalyDetector` — the "narrowband +
 harmonically-unrelated + flat-or-growing sustain" rule. This is the number the

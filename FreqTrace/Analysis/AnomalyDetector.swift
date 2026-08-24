@@ -2,20 +2,35 @@
 //  AnomalyDetector.swift
 //  FreqTrace
 //
-//  The Anomaly Candidate detector (ticket #5, ADR 0001, CONTEXT.md
-//  "Anomaly Candidate"): flags frequencies as narrowband + harmonically
-//  unrelated + sustained over a rolling frame window, without attempting
-//  to classify the cause (feedback vs. room resonance) -- ADR 0001
-//  deliberately unifies both under one concept for v1. None of the
-//  thresholds below are pinned down by the spec; each is a documented
-//  judgment call, chosen to behave sensibly against the ACs' synthetic
-//  test cases (a sustained pure tone flags, a normal harmonic series
-//  doesn't) rather than derived from a formula. Runs on the raw
-//  (unweighted) spectrum -- Time Averaging is hardcoded to Fast for this
-//  detector (CONTEXT.md "Time Averaging"), i.e. no pre-smoothing at all,
-//  since catching a building ring requires the fastest possible response;
-//  AnomalyDetector's own sustain window is what "Fast" leaves in charge of
-//  responsiveness.
+//  The Anomaly Candidate detector (ticket #5/#38, ADR 0001, CONTEXT.md
+//  "Anomaly Candidate"): flags a narrowband, harmonically-isolated tone that
+//  *rose into existence* -- was ringing up in recent history -- without
+//  classifying the cause (feedback vs. room resonance; ADR 0001 unifies both
+//  for v1). Runs on the raw (unweighted, Fast) spectrum so a genuine
+//  low-frequency resonance isn't hidden by A-weighting or smoothed away.
+//
+//  The rule is a four-state life-cycle (docs/research/anomaly-criteria.md),
+//  replacing the original "flat-or-growing sustain" rule, which flagged any
+//  steady tone (the anchoring bug -- a signal-generator tone read as an
+//  anomaly):
+//    RISING    a climbing peak -> flag (the ring-up, no loudness floor)
+//    hotness   a screaming-hot peak with no rising edge -> flag on loudness
+//    HELD      stopped climbing but holding near its peak -> keep flagging
+//    RELEASING falls away from its held peak -> drop (rings down / settles)
+//    NEVER-ROSE appeared flat, never climbed, not hot -> never flag
+//
+//  Every threshold below is *real-signal-validated* against the real HCMS
+//  feedback dataset -- ~55% detection at ~0.16% false-alarm
+//  (docs/research/anomaly-hcms-validation.md), NOT the synthetic-only values
+//  that detected 0/58 real howls. Levels are dBFS: raw FFT power is referenced
+//  to `fullScalePower` (as SPL/RTA do) before the absolute thresholds. Two
+//  corrections real data forced over the synthetic tuning: the harmonic gate
+//  is a Sabine-style *isolation margin* (a binary "any harmonic present ->
+//  exclude" gate suppressed real howls coinciding with a program harmonic),
+//  and the floor is -45 dBFS (real howls are quiet). Best-effort by design:
+//  it catches ~half of real feedback and effectively never false-alarms on
+//  clean program -- a trustworthy *candidate* flag, not a guaranteed catch
+//  (higher recall needs dual-channel coherence, out of v1 scope).
 //
 
 import Foundation
@@ -98,6 +113,25 @@ nonisolated enum HarmonicRelation {
         return false
     }
 
+    /// Sabine-style harmonic *isolation margin* (US 5,245,665): true if
+    /// `candidate` has a harmonic or subharmonic peak that is *strong* --
+    /// within `margin` dB of it -- i.e. real musical structure, not an
+    /// isolated tone. Unlike `isHarmonicallyRelated` (binary: any harmonic
+    /// present -> exclude), a peak with only a *weak* harmonic (more than
+    /// `margin` dB down) is NOT excluded. This is the #38/HCMS correction:
+    /// on real program the binary gate suppressed a real howl that merely
+    /// coincided with a weaker program harmonic (docs/research/
+    /// anomaly-hcms-validation.md). The comparison is on raw magnitudeDb --
+    /// a level *difference*, so referencing to full-scale would cancel.
+    static func isStronglyRelated(_ candidate: SpectralPeak, to others: [SpectralPeak], withinDb margin: Float) -> Bool {
+        for other in others where other.bin != candidate.bin {
+            guard isHarmonic(candidate.frequencyHz, of: other.frequencyHz)
+                || isHarmonic(other.frequencyHz, of: candidate.frequencyHz) else { continue }
+            if other.magnitudeDb >= candidate.magnitudeDb - margin { return true }
+        }
+        return false
+    }
+
     /// True if `frequency` is within tolerance of an integer multiple (>= 2)
     /// of `fundamental`.
     private static func isHarmonic(_ frequency: Double, of fundamental: Double) -> Bool {
@@ -123,98 +157,163 @@ nonisolated struct AnomalyCandidate: Identifiable, Equatable, Sendable {
     var id: Int { Int(frequencyHz.rounded()) }
 }
 
-/// Stateful rolling-window sustain tracker (ADR 0001's "sustained ...
-/// over a rolling frame window"). Value type -- callers (AudioAnalysisPipeline)
-/// own the mutable instance across hops.
+/// Stateful four-state tracker (see the file header). Value type -- callers
+/// (AudioAnalysisPipeline) own the mutable instance across hops. All
+/// thresholds are HCMS-validated (docs/research/anomaly-hcms-validation.md).
 nonisolated struct AnomalyDetector: Sendable {
-    /// ~350ms sustain window (ADR 0001), long enough to reject a single
-    /// transient hit while still catching a feedback ring building
-    /// quickly. Expressed as a duration and converted to frames via the
-    /// current config's hop duration, not a raw hardcoded frame count --
-    /// it used to be `static let sustainFrameCount = 8`, correct only
-    /// because it assumed the hop duration in effect when it was written
-    /// (2048 samples @ 48kHz ≈ 43ms); AnalysisConfig.default later
-    /// widening its hopSize would have silently doubled this detector's
-    /// real-world sustain window to ~700ms as an unrelated side effect.
-    static let sustainDurationSeconds: Double = 0.35
+    /// Minimum level (dBFS) for a peak to be an anomaly candidate at all --
+    /// quiet spectral texture below this is ignored. -45 dBFS: real howls
+    /// are quiet (HCMS peak levels span ~-51..-2 dBFS), so a higher floor
+    /// silently drops most of them.
+    static let detectFloorDb: Float = -45
 
-    static func sustainFrameCount(for config: AnalysisConfig) -> Int {
-        let hopDurationSeconds = Double(config.hopSize) / config.sampleRate
-        return max(1, Int((sustainDurationSeconds / hopDurationSeconds).rounded()))
-    }
+    /// Minimum climb (dB) across the rise window to count as "ringing up".
+    static let riseThresholdDb: Float = 3
 
-    /// How many consecutive misses a track tolerates before being dropped
-    /// entirely, rather than reset on the very first missed frame -- a
-    /// small allowance for a peak flickering at a bin boundary.
+    /// The rise window -- "was ringing up in recent history". ~800 ms, matched
+    /// to a real feedback ring-up (HCMS howling ramps over ~1 s); the earlier
+    /// ~300 ms was too short and missed the slow real build-up. A duration,
+    /// converted to frames via the current hop, so it stays constant wall-clock
+    /// across FFT sizes.
+    static let riseWindowSeconds: Double = 0.8
+
+    /// Consecutive qualifying hops (rising or hot) before a track latches --
+    /// rejects a single-hop blip. ~85 ms, also duration-derived.
+    static let confirmSeconds: Double = 0.085
+
+    /// Absolute level (dBFS) at/above which a peak flags on loudness alone,
+    /// with no rising edge -- the fast-howl / already-saturated path.
+    /// Conservative: real feedback rarely reaches it, so the rise gate does
+    /// the work; its upper bound is unpinned by the synthetic corpus and left
+    /// safe (docs/research/anomaly-criteria-prototype.md).
+    static let hotThresholdDb: Float = -6
+
+    /// How far (dB) a latched track may fall below its held peak before it's
+    /// released (rings down / settles).
+    static let fallAwayDb: Float = 8
+
+    /// Sabine harmonic-isolation margin (dB): exclude a peak only when a
+    /// harmonic/subharmonic is within this of it. See `HarmonicRelation.
+    /// isStronglyRelated` -- the binary gate over-suppressed real feedback.
+    static let harmonicMarginDb: Float = 10
+
+    /// How many consecutive misses a track tolerates before being dropped --
+    /// a small allowance for a peak flickering at a bin boundary.
     static let releaseFrameCount = 3
 
-    /// How much a peak's level may dip between frames and still count as
-    /// "flat" rather than declining (ADR 0001: "flat-or-growing").
-    static let flatToleranceDb: Float = 1
-
     /// The highest 2-3 candidates are what the Measured Data row shows
-    /// (CONTEXT.md), so the detector itself caps its output here rather
-    /// than every caller re-deriving the same slice.
+    /// (CONTEXT.md), so the detector caps its own output here.
     static let maxReportedCandidates = 3
+
+    static func riseWindowFrames(for config: AnalysisConfig) -> Int {
+        frames(riseWindowSeconds, for: config, minimum: 2)
+    }
+    static func confirmFrames(for config: AnalysisConfig) -> Int {
+        frames(confirmSeconds, for: config, minimum: 1)
+    }
+    private static func frames(_ seconds: Double, for config: AnalysisConfig, minimum: Int) -> Int {
+        let hopDurationSeconds = Double(config.hopSize) / config.sampleRate
+        return max(minimum, Int((seconds / hopDurationSeconds).rounded()))
+    }
 
     private struct Track {
         var bin: Int
-        var consecutiveFrames: Int
-        var missedFrames: Int = 0
-        var lastMagnitudeDb: Float
+        var levelsDbFS: [Float]      // oldest .. newest, bounded to the rise window
+        var latched = false
+        var heldPeakDb: Float
+        var qualifyingStreak = 0
+        var missed = 0
     }
 
     private var tracks: [Int: Track] = [:]
 
     init() {}
 
-    mutating func process(magnitudes: [Float], config: AnalysisConfig) -> [AnomalyCandidate] {
-        let peaks = PeakFinder.findPeaks(magnitudes: magnitudes, config: config)
-        let candidatePeaks = peaks.filter { !HarmonicRelation.isHarmonicallyRelated($0, to: peaks) }
+    /// `fullScalePower` references raw FFT power to full-scale (dBFS) before
+    /// the absolute thresholds -- the same reference SPL/RTA use.
+    mutating func process(magnitudes: [Float], fullScalePower: Float, config: AnalysisConfig) -> [AnomalyCandidate] {
+        let binHz = config.sampleRate / Double(config.windowSize)
+        let riseWindow = Self.riseWindowFrames(for: config)
+        let confirm = Self.confirmFrames(for: config)
+        let historyLength = riseWindow + 1
 
-        // Found by code review: matching against `tracks.keys.first(where:)`
-        // without excluding keys already claimed this frame let two
-        // distinct simultaneous peaks within 1 bin of the same track
-        // silently collide -- the second peak overwrote the first's
-        // update instead of starting its own track.
+        func levelDbFS(_ bin: Int) -> Float {
+            MagnitudeScaling.decibels(power: fullScalePower > 0 ? magnitudes[bin] / fullScalePower : magnitudes[bin])
+        }
+
+        // Narrowband + harmonically-isolated peaks above the candidate floor.
+        let peaks = PeakFinder.findPeaks(magnitudes: magnitudes, config: config)
+        let candidatePeaks = peaks
+            .filter { !HarmonicRelation.isStronglyRelated($0, to: peaks, withinDb: Self.harmonicMarginDb) }
+            .filter { levelDbFS($0.bin) >= Self.detectFloorDb }
+
+        // Match to existing tracks or start new ones. The `matchedKeys` guard
+        // (found by code review) stops two distinct peaks within 1 bin of the
+        // same track from silently colliding.
         var matchedKeys = Set<Int>()
         for peak in candidatePeaks {
+            let level = levelDbFS(peak.bin)
             if let key = tracks.keys.first(where: { !matchedKeys.contains($0) && abs($0 - peak.bin) <= 1 }) {
                 var track = tracks[key]!
-                let isFlatOrGrowing = peak.magnitudeDb >= track.lastMagnitudeDb - Self.flatToleranceDb
-                track.consecutiveFrames = isFlatOrGrowing ? track.consecutiveFrames + 1 : 0
-                track.lastMagnitudeDb = peak.magnitudeDb
-                track.missedFrames = 0
+                track.levelsDbFS.append(level)
+                if track.levelsDbFS.count > historyLength { track.levelsDbFS.removeFirst() }
+                track.missed = 0
                 track.bin = peak.bin
                 tracks[key] = track
                 matchedKeys.insert(key)
             } else {
-                tracks[peak.bin] = Track(bin: peak.bin, consecutiveFrames: 1, lastMagnitudeDb: peak.magnitudeDb)
+                tracks[peak.bin] = Track(bin: peak.bin, levelsDbFS: [level], heldPeakDb: level)
                 matchedKeys.insert(peak.bin)
             }
         }
 
-        // Found by code review: unconditionally zeroing consecutiveFrames
-        // on every miss defeated releaseFrameCount's entire purpose -- an
-        // already-promoted candidate would flicker out of the reported
-        // list on a single missed frame (e.g. right at a bin boundary) and
-        // have to re-accumulate all sustainFrameCount frames from scratch.
-        // Sustain progress is now only lost once the track is actually
-        // dropped past the release tolerance.
+        // Age out tracks that didn't appear this hop (fell below the floor or
+        // vanished); the release tolerance lets a bin-boundary flicker survive.
         for key in tracks.keys where !matchedKeys.contains(key) {
-            tracks[key]?.missedFrames += 1
-            if let missed = tracks[key]?.missedFrames, missed > Self.releaseFrameCount {
+            tracks[key]?.missed += 1
+            if let missed = tracks[key]?.missed, missed > Self.releaseFrameCount {
                 tracks.removeValue(forKey: key)
             }
         }
 
-        let binHz = config.sampleRate / Double(config.windowSize)
-        let sustainFrameCount = Self.sustainFrameCount(for: config)
-        let candidates = tracks.values
-            .filter { $0.consecutiveFrames >= sustainFrameCount }
-            .map { AnomalyCandidate(frequencyHz: Double($0.bin) * binHz, severityDb: $0.lastMagnitudeDb) }
-            .sorted { $0.severityDb > $1.severityDb }
+        // Advance the state machine for every track seen this hop.
+        for key in matchedKeys where tracks[key] != nil {
+            var track = tracks[key]!
+            let current = track.levelsDbFS.last!
+            if track.latched {
+                track.heldPeakDb = max(track.heldPeakDb, current)
+                if current < track.heldPeakDb - Self.fallAwayDb {
+                    tracks.removeValue(forKey: key)   // RELEASING: fell away
+                    continue
+                }
+            } else {
+                let hot = current >= Self.hotThresholdDb
+                let rose = Self.isRising(track.levelsDbFS, window: riseWindow)
+                track.qualifyingStreak = (hot || rose) ? track.qualifyingStreak + 1 : 0
+                if track.qualifyingStreak >= confirm {
+                    track.latched = true          // RISING/hot -> flag
+                    track.heldPeakDb = current
+                }
+            }
+            tracks[key] = track
+        }
 
-        return Array(candidates.prefix(Self.maxReportedCandidates))
+        return tracks.values
+            .filter(\.latched)
+            .map { AnomalyCandidate(frequencyHz: Double($0.bin) * binHz, severityDb: $0.levelsDbFS.last!) }
+            .sorted { $0.severityDb > $1.severityDb }
+            .prefix(Self.maxReportedCandidates)
+            .map { $0 }
+    }
+
+    /// True if the track climbed at least `riseThresholdDb` across the rise
+    /// window (a plain climb -- "climb now, shape later"; the accelerating-shape
+    /// lever was found unnecessary and harmful, docs/research/
+    /// anomaly-criteria-prototype.md).
+    private static func isRising(_ levelsDbFS: [Float], window: Int) -> Bool {
+        guard levelsDbFS.count >= window + 1 else { return false }
+        let start = levelsDbFS[levelsDbFS.count - 1 - window]
+        let recent = levelsDbFS[levelsDbFS.count - 1]
+        return recent - start >= riseThresholdDb
     }
 }

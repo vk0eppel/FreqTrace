@@ -1,18 +1,22 @@
 import Foundation
 
-// HCMS retune (ticket #37): a grid sweep of the anomaly criteria against the
-// real HCMS dataset (58 clips, real music/speech driven into feedback, howling
-// ramping up at t=8 s at the CSV's MSG frequency, 16 kHz). Finds the achievable
-// detection-vs-false-alarm frontier, sweeping FFT config, rise timing, floor,
-// and the Sabine harmonic-isolation margin. Real FFT power is referenced to
-// FrequencyTracker.fullScalePower before the dBFS thresholds (the step #38
-// must do).
+// HCMS validation (ticket #37/#38): runs the PRODUCTION AnomalyDetector over
+// the real HCMS dataset (58 clips of real music/speech driven into feedback,
+// howling ramping up at t=8 s at the CSV's MSG frequency, 16 kHz) and reports
+// the detection rate and clean-program false-alarm rate -- confirming the
+// shipped detector reproduces the retune's ~55% detection at 0% false-alarm
+// (docs/research/anomaly-hcms-validation.md).
 //
-// Detection = the MSG frequency flagged during the howl phase (>= t=8 s).
-// False-alarm RATE = fraction of clean-program hops (window entirely < 8 s)
-// that emit any candidate -- a rate, not the earlier harsh "any flag = fail",
-// so an occasional flag on an ambiguous sustained note isn't a whole-clip fail.
+// The detector takes the raw FFT spectrum + fullScalePower (it references to
+// dBFS internally). This validates exactly what ships, not a prototype.
+//
+// Detection  = the MSG frequency flagged during the howl phase (>= t=8 s).
+// False-alarm = fraction of clean-program hops (window entirely < 8 s) that
+//               emit any candidate.
 
+// 16 kHz config with ~43 ms hops, so the detector's duration-derived rise
+// window (~800 ms) lands at the same frame count as at the app's 48 kHz.
+let config = AnalysisConfig(sampleRate: 16000, windowSize: 2048, hopSize: 683)
 let onsetSeconds = 8.0
 
 func loadWavMono16(_ path: String) -> [Float]? {
@@ -49,125 +53,47 @@ func msgFrequency(csvPath: String) -> Double? {
     return hz
 }
 
-// One clip's per-hop normalized (dBFS-referenced) spectra at a given config,
-// plus where the MSG bin is and which hops are clean vs. howl.
-struct PreparedClip {
-    let spectra: [[Float]]
-    let msgHz: Double
-    let cleanHops: Int       // hops whose window is entirely before onset
-    let onsetHop: Int        // first hop whose window reaches onset
-}
-
-func prepare(samples: [Float], msgHz: Double, config: AnalysisConfig, tracker: FrequencyTracker) -> PreparedClip {
+// Returns (detected?, cleanFlaggedHops, cleanHops) for one clip.
+func score(samples: [Float], msgHz: Double, tracker: FrequencyTracker) -> (Bool, Int, Int) {
     let fsp = tracker.fullScalePower
+    let binHz = config.sampleRate / Double(config.windowSize)
+    let tol = max(msgHz * 0.03, 2 * binHz)
+    var detector = AnomalyDetector()
     var window = [Float](repeating: 0, count: config.windowSize)
     let hopCount = max(0, samples.count / config.hopSize)
-    var spectra: [[Float]] = []; spectra.reserveCapacity(hopCount)
     let onsetSample = Int(onsetSeconds * config.sampleRate)
-    var cleanHops = 0, onsetHop = hopCount
+    var detected = false, cleanFlagged = 0, cleanHops = 0
     for hop in 0..<hopCount {
         window.removeFirst(config.hopSize)
         let start = hop * config.hopSize
         for i in 0..<config.hopSize { let idx = start+i; window.append(idx < samples.count ? samples[idx] : 0) }
-        var mags = tracker.spectrum(in: window) ?? [Float](repeating: 0, count: config.windowSize/2)
-        if fsp > 0 { for i in 0..<mags.count { mags[i] /= fsp } }
-        spectra.append(mags)
-        let windowEnd = (hop + 1) * config.hopSize
-        if windowEnd <= onsetSample { cleanHops += 1 }
-        if windowEnd > onsetSample && onsetHop == hopCount { onsetHop = hop }
+        guard let mags = tracker.spectrum(in: window) else { continue }
+        let cands = detector.process(magnitudes: mags, fullScalePower: fsp, config: config)
+        let clean = (hop + 1) * config.hopSize <= onsetSample
+        if clean { cleanHops += 1; if !cands.isEmpty { cleanFlagged += 1 } }
+        if !clean, cands.contains(where: { abs($0.frequencyHz - msgHz) <= tol }) { detected = true }
     }
-    return PreparedClip(spectra: spectra, msgHz: msgHz, cleanHops: cleanHops, onsetHop: onsetHop)
-}
-
-// Returns (detected?, cleanFlaggedHops) for one prepared clip + params.
-func evaluate(_ clip: PreparedClip, config: AnalysisConfig, params: PrototypeParams) -> (Bool, Int) {
-    let binHz = config.sampleRate / Double(config.windowSize)
-    let tol = max(clip.msgHz * 0.03, 2 * binHz)
-    var det = PrototypeAnomalyDetector(params: params)
-    var detected = false, cleanFlagged = 0
-    for (hop, mags) in clip.spectra.enumerated() {
-        let cands = det.process(magnitudes: mags, config: config)
-        if hop < clip.cleanHops, !cands.isEmpty { cleanFlagged += 1 }
-        if hop >= clip.onsetHop, cands.contains(where: { abs($0.frequencyHz - clip.msgHz) <= tol }) { detected = true }
-    }
-    return (detected, cleanFlagged)
-}
-
-func baseParams(floorDb: Float, riseWindowHops: Int, riseDb: Float, margin: Float?) -> PrototypeParams {
-    var p = PrototypeParams.tuned
-    p.detectFloorDb = floorDb
-    p.riseWindowHops = max(2, riseWindowHops)
-    p.riseThresholdDb = riseDb
-    p.harmonicMarginDb = margin      // nil = binary gate
-    p.hotThresholdDb = -6            // unreachable on HCMS; rise gate does the work
-    return p
+    return (detected, cleanFlagged, cleanHops)
 }
 
 // --- main ---
 let dir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : (NSHomeDirectory() + "/hcms-data")
 let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
-let clipNames = files.filter { $0.hasSuffix(".wav") }.sorted()
-guard !clipNames.isEmpty else { print("No .wav in \(dir)"); exit(1) }
+let clips = files.filter { $0.hasSuffix(".wav") }.sorted()
+guard !clips.isEmpty else { print("No .wav in \(dir) (run fetch.sh first)"); exit(1) }
 
-struct Raw { let samples: [Float]; let msg: Double }
-var raws: [Raw] = []
-for wav in clipNames {
+let tracker = FrequencyTracker(config: config)
+var detectedCount = 0, total = 0
+var faSum = 0.0
+for wav in clips {
     let base = (wav as NSString).deletingPathExtension
-    if let s = loadWavMono16("\(dir)/\(wav)"), let m = msgFrequency(csvPath: "\(dir)/\(base).csv") {
-        raws.append(Raw(samples: s, msg: m))
-    }
+    guard let samples = loadWavMono16("\(dir)/\(wav)"), let msg = msgFrequency(csvPath: "\(dir)/\(base).csv") else { continue }
+    let (detected, cf, ch) = score(samples: samples, msgHz: msg, tracker: tracker)
+    total += 1
+    if detected { detectedCount += 1 }
+    if ch > 0 { faSum += Double(cf) / Double(ch) }
 }
-print("Loaded \(raws.count) HCMS clips from \(dir)\n")
-
-struct Result { let label: String; let det: Double; let faRate: Double }
-
-let configs: [(String, AnalysisConfig)] = [
-    ("win2048/hop683 (128ms/43ms)", AnalysisConfig(sampleRate: 16000, windowSize: 2048, hopSize: 683)),
-    ("win4096/hop683 (256ms/43ms)", AnalysisConfig(sampleRate: 16000, windowSize: 4096, hopSize: 683)),
-    ("win4096/hop1024 (256ms/64ms)", AnalysisConfig(sampleRate: 16000, windowSize: 4096, hopSize: 1024)),
-]
-let floors: [Float] = [-45, -40, -35]
-let riseMs: [Double] = [300, 500, 800]
-let riseDbs: [Float] = [3, 4, 6]
-let margins: [Float?] = [nil, 10, 15, 20, 33]
-
-var all: [Result] = []
-for (cfgLabel, config) in configs {
-    let tracker = FrequencyTracker(config: config)
-    let hopMs = Double(config.hopSize) / config.sampleRate * 1000
-    let prepared = raws.map { prepare(samples: $0.samples, msgHz: $0.msg, config: config, tracker: tracker) }
-    let n = Double(prepared.count)
-    for floor in floors {
-        for rMs in riseMs {
-            let rHops = Int((rMs / hopMs).rounded())
-            for rDb in riseDbs {
-                for margin in margins {
-                    let p = baseParams(floorDb: floor, riseWindowHops: rHops, riseDb: rDb, margin: margin)
-                    var detCount = 0.0, faSum = 0.0
-                    for clip in prepared {
-                        let (d, cf) = evaluate(clip, config: config, params: p)
-                        if d { detCount += 1 }
-                        if clip.cleanHops > 0 { faSum += Double(cf) / Double(clip.cleanHops) }
-                    }
-                    let mg = margin.map { "Sab\(Int($0))" } ?? "binary"
-                    let label = "\(cfgLabel) floor\(Int(floor)) rise\(Int(rMs))ms/\(Int(rDb))dB \(mg)"
-                    all.append(Result(label: label, det: detCount / n * 100, faRate: faSum / n * 100))
-                }
-            }
-        }
-    }
-}
-
-// Frontier: best detection achievable at each false-alarm-rate ceiling.
-print("=== achievable detection vs. clean-program false-alarm rate (all 58 clips) ===")
-for faCap in [0.0, 0.5, 1.0, 2.0, 5.0, 10.0] {
-    let eligible = all.filter { $0.faRate <= faCap + 1e-9 }
-    if let best = eligible.max(by: { $0.det < $1.det }) {
-        print(String(format: "FA <= %4.1f%%  ->  best detection %5.1f%%  (FA %.2f%%)  |  %@",
-                     faCap, best.det, best.faRate, best.label as NSString))
-    } else {
-        print(String(format: "FA <= %4.1f%%  ->  (no combo)", faCap))
-    }
-}
-let bestDet = all.max(by: { $0.det < $1.det })!
-print(String(format: "\nabsolute max detection: %.1f%% (FA %.2f%%)  |  %@", bestDet.det, bestDet.faRate, bestDet.label as NSString))
+print("\n=== HCMS validation — PRODUCTION AnomalyDetector, \(total) clips ===")
+print(String(format: "detection: %d/%d (%.1f%%)  |  clean-program false-alarm rate: %.2f%%",
+             detectedCount, total, Double(detectedCount) / Double(total) * 100, faSum / Double(total) * 100))
+print("(expected ~55% detection at ~0% false-alarm — see docs/research/anomaly-hcms-validation.md)")
