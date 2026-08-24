@@ -53,10 +53,17 @@ nonisolated struct PrototypeParams: Sendable {
     var fallAwayDb: Float
     /// Missed frames tolerated before a track is dropped (bin-boundary flicker).
     var releaseFrameCount: Int
-    /// Whether the binary harmonic-exclusion gate is applied. Only used to
+    /// Whether the harmonic-exclusion gate is applied at all. Only used to
     /// demonstrate the gate is load-bearing (a rising musical note flags with
     /// it off, not on); production keeps it on.
     var harmonicGateEnabled: Bool = true
+    /// If set, use a Sabine-style harmonic-isolation *margin* (exclude a peak
+    /// only when a harmonic/subharmonic peak is within this many dB of it)
+    /// instead of the binary "any harmonic present -> exclude" gate. Needed
+    /// on real program material, where the binary gate over-suppresses a howl
+    /// that merely coincides with a weak program harmonic (#37 / HCMS
+    /// finding). `nil` = binary gate.
+    var harmonicMarginDb: Float? = nil
 
     /// The plain "climb now, shape later" rule -- no accelerating-shape check.
     static let simpleClimb = PrototypeParams(
@@ -117,7 +124,7 @@ nonisolated struct PrototypeAnomalyDetector {
         // Narrowband + harmonically-unrelated peaks above the candidate floor.
         let peaks = PeakFinder.findPeaks(magnitudes: magnitudes, config: config)
         let candidatePeaks = peaks
-            .filter { !params.harmonicGateEnabled || !HarmonicRelation.isHarmonicallyRelated($0, to: peaks) }
+            .filter { !params.harmonicGateEnabled || !isExcludedByHarmonic($0, peaks: peaks) }
             .filter { MagnitudeScaling.decibels(power: magnitudes[$0.bin]) >= params.detectFloorDb }
 
         var matchedKeys = Set<Int>()
@@ -174,6 +181,36 @@ nonisolated struct PrototypeAnomalyDetector {
             .sorted { $0.severityDb > $1.severityDb }
             .prefix(AnomalyDetector.maxReportedCandidates)
             .map { $0 }
+    }
+
+    /// Whether `peak` should be excluded as harmonically related. Binary mode
+    /// (`harmonicMarginDb == nil`) defers to `HarmonicRelation` (any harmonic
+    /// present → exclude). Margin mode excludes only when a harmonic or
+    /// subharmonic peak is within `margin` dB of `peak` (a *strong* harmonic,
+    /// i.e. real musical structure) — so an isolated howl that merely
+    /// coincides with a weak program harmonic survives.
+    private func isExcludedByHarmonic(_ peak: SpectralPeak, peaks: [SpectralPeak]) -> Bool {
+        guard let margin = params.harmonicMarginDb else {
+            return HarmonicRelation.isHarmonicallyRelated(peak, to: peaks)
+        }
+        for other in peaks where other.bin != peak.bin {
+            guard isIntegerRatio(peak.frequencyHz, other.frequencyHz) else { continue }
+            if other.magnitudeDb >= peak.magnitudeDb - margin { return true }
+        }
+        return false
+    }
+
+    /// True if either frequency is within 3% of an integer multiple (≥2) of
+    /// the other — the same relation `HarmonicRelation` uses, reimplemented
+    /// here because its helper is private.
+    private func isIntegerRatio(_ a: Double, _ b: Double) -> Bool {
+        func near(_ x: Double, _ y: Double) -> Bool { abs(x - y) <= 0.03 * y }
+        func harmonic(_ f: Double, of fund: Double) -> Bool {
+            guard fund > 0 else { return false }
+            let n = (f / fund).rounded()
+            return n >= 2 && near(f, n * fund)
+        }
+        return harmonic(a, of: b) || harmonic(b, of: a)
     }
 
     /// True if the track climbed at least `riseThresholdDb` across the rise
