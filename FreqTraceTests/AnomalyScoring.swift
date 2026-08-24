@@ -109,34 +109,41 @@ nonisolated struct CorpusScorer {
         return abs(hz - target) <= tol
     }
 
+    /// The FFT bin a frequency lands in.
+    private func bin(forHz hz: Double) -> Int {
+        Int((hz / config.binResolutionHz).rounded())
+    }
+
     /// The FFT bin the case's target tone lands in.
     private func targetBin(for testCase: CorpusCase) -> Int {
-        Int((testCase.targetHz / config.binResolutionHz).rounded())
+        bin(forHz: testCase.targetHz)
     }
 
     /// The magnitude spectrum the FFT would produce at `hop`: a flat floor
-    /// with the target bin raised to the envelope's mean power over the
-    /// windowSize samples ending at this hop (zero before the signal
+    /// with each component's bin raised to that component's mean power over
+    /// the windowSize samples ending at this hop (zero before the signal
     /// starts), i.e. amplitude^2 averaged over the window -- the windowed
     /// power a real FFT integrates.
     func spectrum(for testCase: CorpusCase, hop: Int) -> [Float] {
         let binCount = config.windowSize / 2
-        let targetBin = targetBin(for: testCase)
         var magnitudes = [Float](repeating: floorPower, count: binCount)
-        guard targetBin > 0, targetBin < binCount else { return magnitudes }
 
         let windowEnd = (hop + 1) * config.hopSize
         let windowStart = windowEnd - config.windowSize
-        var sumSq: Double = 0
-        for idx in windowStart..<windowEnd {
-            guard idx >= 0 else { continue }
-            let t = Double(idx) / config.sampleRate
-            guard t < testCase.durationSec else { continue }
-            let a = Double(testCase.envelope(t))
-            sumSq += a * a
+        for component in testCase.components {
+            let binIndex = bin(forHz: component.hz)
+            guard binIndex > 0, binIndex < binCount else { continue }
+            var sumSq: Double = 0
+            for idx in windowStart..<windowEnd {
+                guard idx >= 0 else { continue }
+                let t = Double(idx) / config.sampleRate
+                guard t < testCase.durationSec else { continue }
+                let a = Double(component.envelope(t))
+                sumSq += a * a
+            }
+            let power = Float(sumSq / Double(config.windowSize))
+            magnitudes[binIndex] = max(magnitudes[binIndex], power)
         }
-        let power = Float(sumSq / Double(config.windowSize))
-        magnitudes[targetBin] = max(power, floorPower)
         return magnitudes
     }
 
