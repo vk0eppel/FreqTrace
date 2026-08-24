@@ -76,3 +76,13 @@ Score this criteria set against the [10-case corpus](./anomaly-validation-corpus
 - **Decide the harmonic gate** (§2) against cases 8, 9.
 - **Measure whether the two refinement levers are needed:** accelerating-shape (if case 7 hand-ramps false-flag) and fluctuation-detection (if steady modes over-persist).
 - **Confirm the hard gate:** zero false negatives on the must-flag set (cases 1–4), catchable ring-up flagged within ~500 ms.
+
+> **Done (#36).** The prototype cleared the synthetic corpus **7/7** (vs. the
+> 5/7 baseline) — see [anomaly-criteria-prototype.md](./anomaly-criteria-prototype.md)
+> for the pinned values and findings. Headline surprises: a **candidate
+> detectability floor (~−25 dBFS)**, *not* the accelerating-shape lever, is what
+> rejects the hand-ramp — and the shape lever is actively harmful (it also
+> rejects a genuine room-mode bloom). **Neither refinement lever is used**; the
+> harmonic gate stays binary, deferred to real captures (#37). The production
+> detector (#38) must reference `fullScalePower` before applying these dB
+> thresholds.
