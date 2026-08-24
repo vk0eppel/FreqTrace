@@ -17,10 +17,8 @@ cd "$(dirname "$0")/../.."
 DATA="${1:-$HOME/hcms-data}"
 BUILD="$(mktemp -d)"
 
-# The prototype detector @testable-imports FreqTrace; as a single-module
-# standalone build there's no separate module, so strip that import.
-grep -v "@testable import FreqTrace" FreqTraceTests/PrototypeAnomalyDetector.swift > "$BUILD/PrototypeAnomalyDetector.swift"
-
+# Compile the production DSP sources (incl. the shipped AnomalyDetector) into
+# a standalone binary and score it against the local HCMS clips.
 swiftc -O -framework Accelerate \
   FreqTrace/Analysis/FrequencyTracker.swift \
   FreqTrace/Analysis/AnalysisConfig.swift \
@@ -28,7 +26,6 @@ swiftc -O -framework Accelerate \
   FreqTrace/Analysis/Weighting.swift \
   FreqTrace/Waterfall/MagnitudeScaling.swift \
   FreqTrace/Analysis/AnomalyDetector.swift \
-  "$BUILD/PrototypeAnomalyDetector.swift" \
   scripts/hcms-validate/main.swift \
   -o "$BUILD/hcms_validate"
 

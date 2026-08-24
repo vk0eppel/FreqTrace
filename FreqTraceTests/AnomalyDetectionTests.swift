@@ -107,118 +107,155 @@ struct HarmonicRelationTests {
 
         #expect(!HarmonicRelation.isHarmonicallyRelated(stray, to: [fundamental, stray]))
     }
+
+    // The Sabine isolation margin (#38): a STRONG harmonic (within the margin)
+    // excludes; a WEAK one (beyond it) does not -- the correction that lets a
+    // real howl through when it merely coincides with a weak program harmonic.
+
+    private func peak(bin: Int, hz: Double, db: Float) -> SpectralPeak {
+        SpectralPeak(bin: bin, frequencyHz: hz, magnitudeDb: db)
+    }
+
+    @Test func aStrongHarmonicExcludesUnderTheMargin() {
+        let fundamental = peak(bin: 1, hz: 1000, db: -10)
+        let strongHarmonic = peak(bin: 2, hz: 2000, db: -16) // 6dB down, within a 10dB margin
+        #expect(HarmonicRelation.isStronglyRelated(fundamental, to: [fundamental, strongHarmonic], withinDb: 10))
+    }
+
+    @Test func aWeakHarmonicDoesNotExcludeUnderTheMargin() {
+        let fundamental = peak(bin: 1, hz: 1000, db: -10)
+        let weakHarmonic = peak(bin: 2, hz: 2000, db: -30) // 20dB down, beyond a 10dB margin
+        #expect(!HarmonicRelation.isStronglyRelated(fundamental, to: [fundamental, weakHarmonic], withinDb: 10))
+        // Binary would still have excluded it -- the whole point of the margin.
+        #expect(HarmonicRelation.isHarmonicallyRelated(fundamental, to: [fundamental, weakHarmonic]))
+    }
 }
 
 struct AnomalyDetectorTests {
 
     private let config = AnalysisConfig.default
-    private let binHz: Double
+    private let fullScalePower: Float = 1.0   // so power == dBFS directly
+    private var binHz: Double { config.sampleRate / Double(config.windowSize) }
+    private var riseWindow: Int { AnomalyDetector.riseWindowFrames(for: config) }
+    private var confirm: Int { AnomalyDetector.confirmFrames(for: config) }
 
-    init() {
-        binHz = config.sampleRate / Double(config.windowSize)
-    }
-
-    private func spectrum(withPeaksAt bins: [(bin: Int, power: Float)]) -> [Float] {
+    /// A spectrum with each named bin set to a given dBFS level (power =
+    /// 10^(dB/10)), everything else at a -80 dBFS floor.
+    private func spectrum(_ tones: [(bin: Int, db: Float)]) -> [Float] {
         var magnitudes = [Float](repeating: 1e-8, count: config.windowSize / 2)
-        for (bin, power) in bins {
-            magnitudes[bin] = power
-        }
+        for (bin, db) in tones { magnitudes[bin] = Float(pow(10.0, Double(db) / 10.0)) }
         return magnitudes
     }
 
-    @Test func aSustainedNarrowbandToneIsFlaggedAfterEnoughFrames() {
-        var detector = AnomalyDetector()
-        let toneBin = 500
-        var lastCandidates: [AnomalyCandidate] = []
+    private func flagged(_ candidates: [AnomalyCandidate], bin: Int) -> Bool {
+        candidates.contains { abs($0.frequencyHz - Double(bin) * binHz) < binHz }
+    }
 
-        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) + 2) {
-            lastCandidates = detector.process(magnitudes: spectrum(withPeaksAt: [(toneBin, 1.0)]), config: config)
+    private func run(_ detector: inout AnomalyDetector, _ spectrum: [Float]) -> [AnomalyCandidate] {
+        detector.process(magnitudes: spectrum, fullScalePower: fullScalePower, config: config)
+    }
+
+    // MARK: The four-state life-cycle
+
+    /// A climbing tone (a ring-up) is flagged.
+    @Test func aRisingToneIsFlagged() {
+        var detector = AnomalyDetector()
+        var last: [AnomalyCandidate] = []
+        for i in 0..<(riseWindow + confirm + 2) {          // climbs 1 dB/frame from -40 dBFS
+            last = run(&detector, spectrum([(500, -40 + Float(i))]))
         }
-
-        #expect(lastCandidates.contains { abs($0.frequencyHz - Double(toneBin) * binHz) < 1 })
+        #expect(flagged(last, bin: 500))
     }
 
-    @Test func aBriefTransientIsNotFlagged() {
+    /// A steady, flat tone is NOT flagged -- the anchoring bug (a steady
+    /// signal-generator tone read as an anomaly) is fixed structurally: it
+    /// never rose, and it's below the hotness trigger.
+    @Test func aSteadyToneIsNotFlagged() {
         var detector = AnomalyDetector()
-        let toneBin = 500
-
-        // Only one frame of energy -- well short of sustainFrameCount.
-        let candidates = detector.process(magnitudes: spectrum(withPeaksAt: [(toneBin, 1.0)]), config: config)
-
-        #expect(!candidates.contains { $0.frequencyHz > 0 && abs($0.frequencyHz - Double(toneBin) * binHz) < 1 })
+        var last: [AnomalyCandidate] = []
+        for _ in 0..<(riseWindow + 5) { last = run(&detector, spectrum([(500, -20)])) }
+        #expect(!flagged(last, bin: 500))
     }
 
-    @Test func aNormalHarmonicSeriesIsNeverFlagged() {
+    /// A screaming-hot tone flags on loudness alone, with no rising edge
+    /// (the fast-howl / already-saturated path).
+    @Test func aHotToneIsFlaggedWithoutRising() {
         var detector = AnomalyDetector()
-        // A fundamental plus 2nd/3rd harmonics, all sustained -- a musical
-        // note, not feedback (ADR 0001's negative case).
-        let bins: [(Int, Float)] = [(100, 1.0), (200, 0.6), (300, 0.4)]
-        var lastCandidates: [AnomalyCandidate] = []
+        var last: [AnomalyCandidate] = []
+        for _ in 0..<(confirm + 2) { last = run(&detector, spectrum([(500, -3)])) }  // -3 >= hotness -6
+        #expect(flagged(last, bin: 500))
+    }
 
-        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) + 2) {
-            lastCandidates = detector.process(magnitudes: spectrum(withPeaksAt: bins), config: config)
+    /// A rising tone that stays below the detectability floor is ignored.
+    @Test func aRisingToneBelowTheFloorIsNotFlagged() {
+        var detector = AnomalyDetector()
+        var last: [AnomalyCandidate] = []
+        for i in 0..<(riseWindow + 5) {                    // -70 .. ~-64 dBFS, always below -45
+            last = run(&detector, spectrum([(500, -70 + Float(i) * 0.3)]))
         }
-
-        #expect(lastCandidates.isEmpty)
+        #expect(!flagged(last, bin: 500))
     }
 
-    @Test func twoSimultaneousSustainedTonesBothAppearRankedBySeverity() {
+    /// A flagged tone is released once it falls away from its held peak.
+    @Test func aFlaggedToneIsReleasedWhenItFallsAway() {
         var detector = AnomalyDetector()
-        let quietBin = 300
-        let loudBin = 700
-        var lastCandidates: [AnomalyCandidate] = []
+        var last: [AnomalyCandidate] = []
+        for i in 0..<(riseWindow + confirm + 2) { last = run(&detector, spectrum([(500, -40 + Float(i))])) }
+        #expect(flagged(last, bin: 500), "should be flagged after ringing up")
+        for _ in 0..<(AnomalyDetector.releaseFrameCount + 2) { last = run(&detector, spectrum([(500, -35)])) }  // > fall-away below the held peak
+        #expect(!flagged(last, bin: 500), "should release once it drops away")
+    }
 
-        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) + 2) {
-            lastCandidates = detector.process(
-                magnitudes: spectrum(withPeaksAt: [(quietBin, 0.1), (loudBin, 1.0)]), config: config
-            )
+    // MARK: Harmonic isolation (Sabine margin)
+
+    /// A rising musical note (fundamental + a strong harmonic) is not flagged.
+    @Test func aRisingToneWithAStrongHarmonicIsNotFlagged() {
+        var detector = AnomalyDetector()
+        var last: [AnomalyCandidate] = []
+        for i in 0..<(riseWindow + confirm + 2) {
+            let db = -30 + Float(i) * 0.8
+            last = run(&detector, spectrum([(100, db), (200, db - 6)]))  // 2nd harmonic 6 dB down (within 10 dB margin)
         }
-
-        #expect(lastCandidates.count == 2)
-        #expect(lastCandidates[0].severityDb > lastCandidates[1].severityDb)
-        #expect(abs(lastCandidates[0].frequencyHz - Double(loudBin) * binHz) < 1)
+        #expect(!flagged(last, bin: 100))
     }
 
-    @Test func zeroCandidatesWhenNothingIsSustained() {
+    /// The Sabine benefit (enabled by the -45 floor): a rising tone whose only
+    /// harmonic is WEAK (beyond the margin) IS flagged -- the binary gate
+    /// would have wrongly suppressed it.
+    @Test func aRisingToneWithOnlyAWeakHarmonicIsFlagged() {
         var detector = AnomalyDetector()
-
-        let candidates = detector.process(magnitudes: [Float](repeating: 1e-8, count: config.windowSize / 2), config: config)
-
-        #expect(candidates.isEmpty)
-    }
-
-    // Regression tests for two bugs found by code review on #5.
-
-    @Test func aSinglePeakWithinReleaseToleranceDoesNotResetSustainProgress() {
-        var detector = AnomalyDetector()
-        let toneBin = 500
-
-        // Build up sustain progress right to the edge of promotion.
-        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) - 1) {
-            _ = detector.process(magnitudes: spectrum(withPeaksAt: [(toneBin, 1.0)]), config: config)
+        var last: [AnomalyCandidate] = []
+        for i in 0..<(riseWindow + confirm + 2) {
+            let db = -30 + Float(i) * 0.8                                 // fundamental stays below hotness
+            last = run(&detector, spectrum([(100, db), (200, db - 15)]))  // harmonic 15 dB down (> 10 dB margin), above floor
         }
-        // One missed frame (e.g. the peak momentarily fell at a bin
-        // boundary) -- within releaseFrameCount's tolerance.
-        _ = detector.process(magnitudes: spectrum(withPeaksAt: []), config: config)
-        // The very next frame the tone reappears -- sustain progress
-        // should have been preserved, not reset to 0.
-        let candidates = detector.process(magnitudes: spectrum(withPeaksAt: [(toneBin, 1.0)]), config: config)
-
-        #expect(candidates.contains { abs($0.frequencyHz - Double(toneBin) * binHz) < 1 })
+        #expect(flagged(last, bin: 100))
     }
 
-    @Test func twoDistinctSimultaneousPeaksOneBinApartAreTrackedSeparatelyNotCollapsed() {
+    // MARK: Floor / infrastructure
+
+    @Test func zeroCandidatesForSilence() {
         var detector = AnomalyDetector()
-        // Establish a single track at bin 500 first.
-        _ = detector.process(magnitudes: spectrum(withPeaksAt: [(500, 1.0)]), config: config)
+        #expect(run(&detector, spectrum([])).isEmpty)
+    }
 
-        // Now two distinct peaks appear, both within +-1 bin of the
-        // existing track -- must not silently collapse into one.
-        var lastCandidates: [AnomalyCandidate] = []
-        for _ in 0..<(AnomalyDetector.sustainFrameCount(for: .default) + 2) {
-            lastCandidates = detector.process(magnitudes: spectrum(withPeaksAt: [(499, 1.0), (501, 1.0)]), config: config)
-        }
+    /// Two loud tones one bin apart are tracked separately, not collapsed
+    /// (regression: the `matchedKeys` collision guard).
+    @Test func twoPeaksOneBinApartAreTrackedSeparately() {
+        var detector = AnomalyDetector()
+        _ = run(&detector, spectrum([(500, -3)]))          // establish a track at 500
+        var last: [AnomalyCandidate] = []
+        for _ in 0..<(confirm + 3) { last = run(&detector, spectrum([(499, -3), (501, -3)])) }
+        #expect(last.count == 2)
+    }
 
-        #expect(lastCandidates.count == 2)
+    /// A single missed frame within the release tolerance doesn't reset a
+    /// track's progress toward latching (regression).
+    @Test func aBriefMissDoesNotResetProgressTowardFlagging() {
+        var detector = AnomalyDetector()
+        _ = run(&detector, spectrum([(500, -3)]))          // hot, streak 1
+        _ = run(&detector, spectrum([]))                   // one missed frame (within release tolerance)
+        let last = run(&detector, spectrum([(500, -3)]))   // reappears -> streak reaches confirm -> flags
+        #expect(flagged(last, bin: 500))
     }
 }

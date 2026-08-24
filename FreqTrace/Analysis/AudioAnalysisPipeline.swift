@@ -176,7 +176,7 @@ actor AudioAnalysisPipeline {
                     // detector is the ONLY consumer still reading the raw
                     // spectrum; everything else (Tracked Frequency + level,
                     // SPL, waterfall/RTA) reads the blended one.
-                    let anomalyCandidates = anomalyDetector.process(magnitudes: magnitudes, config: config)
+                    let anomalyCandidates = anomalyDetector.process(magnitudes: magnitudes, fullScalePower: tracker.fullScalePower, config: config)
                     // What the waterfall/RTA actually display: Weighting
                     // and Time Averaging both applied (found by user report:
                     // these controls previously had no visible effect on
