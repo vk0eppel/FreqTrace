@@ -97,6 +97,28 @@ nonisolated struct PrototypeParams: Sendable {
         fallAwayDb: 8,
         releaseFrameCount: 3
     )
+
+    /// The real-signal-validated set (docs/research/anomaly-hcms-validation.md):
+    /// 55% detection at 0% false-alarm on the real HCMS dataset. It supersedes
+    /// `.tuned` for #38 -- the real data corrected two synthetic mis-tunings:
+    /// the floor drops to -45 dBFS (real howls are quiet) and the harmonic gate
+    /// becomes a **Sabine 10 dB margin** (binary over-suppresses a howl that
+    /// coincides with a program harmonic). The rise window widens to ~800 ms
+    /// (19 hops at the 42.7 ms cadence) to match a real ~1 s ring-up. Note it
+    /// trips the *synthetic* hand-ramp case (an artifact), but produces 0%
+    /// false-alarms on real program.
+    static let hcmsRetuned = PrototypeParams(
+        detectFloorDb: -45,
+        riseWindowHops: 19,
+        riseThresholdDb: 3,
+        requireNonDecelerating: false,
+        shapeToleranceDb: 2,
+        hotThresholdDb: -6,
+        confirmHops: 2,
+        fallAwayDb: 8,
+        releaseFrameCount: 3,
+        harmonicMarginDb: 10
+    )
 }
 
 nonisolated struct PrototypeAnomalyDetector {

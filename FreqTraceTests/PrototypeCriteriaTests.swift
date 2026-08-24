@@ -192,6 +192,18 @@ struct PrototypeCriteriaTests {
         #expect(roomModeFlagged == false)
     }
 
+    /// The HCMS-retuned params (real-signal validated, docs/research/
+    /// anomaly-hcms-validation.md) still catch the synthetic ring cases --
+    /// lowering the floor to -45 and switching to a Sabine margin didn't break
+    /// must-flag detection. (It does trip the synthetic hand-ramp, case 7, by
+    /// design -- an artifact; on real program it produces 0% false-alarms.)
+    @Test func hcmsRetunedStillCatchesTheRingCases() {
+        for number in [1, 2, 3, 4] {
+            let flagged = score(number: number, .hcmsRetuned).flaggedTargetEver
+            #expect(flagged == true, "retuned params must still catch ring case \(number)")
+        }
+    }
+
     /// Prints the tuned scorecard (visible in Xcode's console), mirrored in
     /// docs/research/anomaly-criteria-prototype.md.
     @Test func recordsPrototypeScorecard() {

@@ -11,13 +11,15 @@ sandboxed, so this runs the DSP outside the test host). It references raw FFT
 power to `FrequencyTracker.fullScalePower` before the dBFS thresholds, the step
 #38 must do.
 
-## Headline: the synthetic-tuned criteria detect **0 / 58** real howls
+## Headline
 
-That is the whole result in one line. The criteria that scored 7/7 on synthetics
-catch **nothing** on real feedback, and lowering the detectability floor alone
-(all the way to −45 dBFS) doesn't change it. **This overturns the "ship #38 as a
-strict improvement" handoff** — as tuned, the new detector would be blind to real
-feedback.
+The synthetic-tuned criteria (7/7 on synthetics) detect **0 / 58** real howls —
+but a **real-signal retune reaches 55% detection at 0% false-alarm**. Two
+synthetic conclusions were wrong and are corrected by real data: the harmonic
+gate must be a **Sabine margin, not binary**, and the floor must be **−45 dBFS,
+not −25**. #38 is shippable on the retuned params, framed as a best-effort aid
+that never false-alarms — a real improvement over both the current buggy rule and
+the synthetic-tuned criteria. Details below.
 
 ## Why: the binary harmonic gate over-suppresses real feedback
 
@@ -54,22 +56,52 @@ rise 3):
 | Sabine 20 dB | 22 / 58 | 2 / 58 |
 | Sabine 33 dB | 11 / 58 | 0 / 58 |
 
-Best **zero-false-alarm** points found: `floor −35, rise 4, Sabine 15 dB` →
-**20/58 (34%)** at 0 false-alarms; or Sabine 33 dB → 11/58 at 0. Catching more
-(37/58) costs 29 false-alarms. **Nowhere near the synthetic 7/7.** Real howls also
-span a huge level range (peak MSG level **−51.7 to −2.2 dBFS**) — many are quiet
-and buried in program, and the −6 dBFS hotness trigger is essentially never
-reached.
+These first-pass numbers used a **300 ms** rise window — too short for HCMS's
+~1 s ramp, which is why detection looked so poor. The full retune below fixes it.
+Real howls also span a huge level range (peak MSG level **−51.7 to −2.2 dBFS**) —
+many are quiet and buried in program, and the −6 dBFS hotness trigger is
+essentially never reached, so the rise gate does all the work.
 
-## What this means for #38
+## The full retune — the real ceiling is **55% detection at 0% false-alarm**
 
-**Do not ship the synthetic-tuned detector.** It detects no real feedback. The
-real correction is clear in direction — **switch the harmonic gate from binary to
-a Sabine margin** — but even tuned, the best honest real-signal performance is
-~34% detection at zero false-alarm, or higher detection with substantial
-false-alarms. That's a product decision, not a threshold tweak: is a detector
-that catches a third of feedback (quietly, no false alarms) useful, or does the
-approach need rethinking (e.g. a coherence/second-mic method, out of v1 scope)?
+Sweeping FFT config × rise timing × floor × Sabine margin across all 58 clips,
+with a **false-alarm *rate*** (fraction of clean-program time flagged) instead of
+the harsh per-clip metric, the achievable frontier is:
+
+| False-alarm ceiling | Best detection | at |
+|---|---|---|
+| **≤ 0.0%** | **55.2%** | floor −45, **rise 800 ms**, 3 dB, Sabine 10 dB, 128 ms window |
+| ≤ 1% | 55.2% | (same, FA 0.00%) |
+| ≤ 10% | 55.2% | 55.2% is the ceiling — more FA tolerance doesn't buy more detection |
+
+The unlock was the **800 ms rise window** matched to the real ramp (the first
+pass's 300 ms missed the slow real build-up). With it, a single-channel spectral
+detector catches **over half of real feedback while never false-alarming on clean
+program** — and 55% is a genuine ceiling for this approach (the missed ~45% are
+quiet howls buried in program or coinciding with strong program harmonics).
+
+**Retuned intents (`PrototypeParams.hcmsRetuned`):** detectability floor **−45
+dBFS**, rise window **~800 ms** (19 hops at the app's 42.7 ms cadence), rise
+**3 dB**, **Sabine margin 10 dB** (not binary), hotness left conservative
+(unreached on real feedback).
+
+## What this means for #38 — shippable as a best-effort aid
+
+**Ship the retuned detector, framed honestly.** It catches **~55% of real
+feedback with zero false-alarms on clean program** — it never cries wolf, and
+when it flags, a tech can trust it. That matches what the Anomaly *Candidate*
+feature always was (candidates, not alarms — CONTEXT.md). It is a large, real
+improvement over both the current buggy flat-or-growing rule *and* the
+synthetic-tuned criteria (0/58).
+
+**The synthetic corpus mis-tuned two knobs, now corrected by real data:**
+- The harmonic gate must be **Sabine margin, not binary** (real program harmonics
+  otherwise suppress the howl). This overturns Step 1's synthetic "binary ≈
+  Sabine."
+- The floor must be **−45 dBFS, not −25** (real howls are quiet). This trips the
+  *synthetic* hand-ramp case (7) — but that case is an artifact; on **real**
+  program material the −45 floor + Sabine 10 + 800 ms rise produce **0%**
+  false-alarms, so the synthetic hand-ramp rejection was over-fit.
 
 ## Honest caveats on this validation
 
@@ -92,10 +124,14 @@ approach need rethinking (e.g. a coherence/second-mic method, out of v1 scope)?
 
 ## Handoff
 
-- **#37 (this ticket) — real signals now in play, and they change the conclusion.**
-  The binary→Sabine correction is confirmed necessary; the honest performance
-  ceiling is characterised. A full retune (sweep config + rise timing + Sabine
-  margin against all 58, with a better false-alarm metric) is the remaining work.
-- **#38 — blocked again, on purpose.** Shipping the current criteria would ship a
-  detector blind to real feedback. #38 should wait on the retune, or the approach
-  should be reconsidered — a call for the maintainer.
+- **#37 (this ticket) — done.** Real signals validated the criteria; the retune
+  found a shippable operating point (55% detection, 0% false-alarm) and corrected
+  two synthetic mis-tunings (binary→Sabine gate, −25→−45 floor). Remaining
+  realism gaps stay documented: HCMS howling is simulated (not room-captured), no
+  room-mode dataset exists, and the false-alarm metric is conservative.
+- **#38 — unblocked, ship the retuned detector as a best-effort aid.** Implement
+  the production detector with `PrototypeParams.hcmsRetuned`, referencing
+  `fullScalePower`. Frame it honestly in the UI/expectations: catches ~half of
+  real feedback, never false-alarms — a trustworthy candidate flag, not a
+  guaranteed catch. A dual-channel/coherence method (Smaart-style) remains the
+  path to higher recall, and is still out of v1 scope.

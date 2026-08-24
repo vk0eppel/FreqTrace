@@ -1,14 +1,18 @@
 import Foundation
 
-// HCMS validator (ticket #37): scores the PrototypeAnomalyDetector against
-// real howling-corrupted music/speech (KU Leuven HCMS, CC-BY-4.0). Each clip
-// is 20 s at 16 kHz; the howling ramps up starting at t=8 s at the CSV's MSG
-// frequency. We check: does the detector flag the MSG frequency after 8 s
-// (and how fast), and does it false-flag during the clean 0-8 s program?
-// Real FFT power is referenced to fullScalePower before the dBFS thresholds
-// (the step #38 must do), exactly as the criteria require.
+// HCMS retune (ticket #37): a grid sweep of the anomaly criteria against the
+// real HCMS dataset (58 clips, real music/speech driven into feedback, howling
+// ramping up at t=8 s at the CSV's MSG frequency, 16 kHz). Finds the achievable
+// detection-vs-false-alarm frontier, sweeping FFT config, rise timing, floor,
+// and the Sabine harmonic-isolation margin. Real FFT power is referenced to
+// FrequencyTracker.fullScalePower before the dBFS thresholds (the step #38
+// must do).
+//
+// Detection = the MSG frequency flagged during the howl phase (>= t=8 s).
+// False-alarm RATE = fraction of clean-program hops (window entirely < 8 s)
+// that emit any candidate -- a rate, not the earlier harsh "any flag = fail",
+// so an occasional flag on an ambiguous sustained note isn't a whole-clip fail.
 
-let config = AnalysisConfig(sampleRate: 16000, windowSize: 2048, hopSize: 683)
 let onsetSeconds = 8.0
 
 func loadWavMono16(_ path: String) -> [Float]? {
@@ -16,7 +20,7 @@ func loadWavMono16(_ path: String) -> [Float]? {
     let bytes = [UInt8](data)
     func u32(_ o: Int) -> Int { Int(bytes[o]) | Int(bytes[o+1])<<8 | Int(bytes[o+2])<<16 | Int(bytes[o+3])<<24 }
     func u16(_ o: Int) -> Int { Int(bytes[o]) | Int(bytes[o+1])<<8 }
-    guard bytes.count > 44, bytes[0]==0x52, bytes[1]==0x49, bytes[2]==0x46, bytes[3]==0x46 else { return nil } // RIFF
+    guard bytes.count > 44, bytes[0]==0x52, bytes[1]==0x49, bytes[2]==0x46, bytes[3]==0x46 else { return nil }
     var o = 12, channels = 1, bits = 16
     var dataStart = -1, dataLen = 0
     while o + 8 <= bytes.count {
@@ -28,12 +32,10 @@ func loadWavMono16(_ path: String) -> [Float]? {
     }
     guard dataStart >= 0, bits == 16 else { return nil }
     let end = min(dataStart + dataLen, bytes.count)
-    var out: [Float] = []
-    out.reserveCapacity((end - dataStart) / (2 * channels))
+    var out: [Float] = []; out.reserveCapacity((end - dataStart) / (2 * channels))
     var i = dataStart
     while i + 2*channels <= end {
-        let s = Int16(bitPattern: UInt16(bytes[i]) | UInt16(bytes[i+1])<<8)   // first channel
-        out.append(Float(s) / 32768.0)
+        out.append(Float(Int16(bitPattern: UInt16(bytes[i]) | UInt16(bytes[i+1])<<8)) / 32768.0)
         i += 2 * channels
     }
     return out
@@ -41,119 +43,131 @@ func loadWavMono16(_ path: String) -> [Float]? {
 
 func msgFrequency(csvPath: String) -> Double? {
     guard let txt = try? String(contentsOfFile: csvPath, encoding: .utf8) else { return nil }
-    let lines = txt.split(separator: "\n").filter { !$0.isEmpty }
-    guard let last = lines.last else { return nil }
+    guard let last = txt.split(separator: "\n").filter({ !$0.isEmpty }).last else { return nil }
     let f = last.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
     guard f.count >= 9, let hz = Double(f[8]) else { return nil }
     return hz
 }
 
-struct ClipResult {
-    let name: String
+// One clip's per-hop normalized (dBFS-referenced) spectra at a given config,
+// plus where the MSG bin is and which hops are clean vs. howl.
+struct PreparedClip {
+    let spectra: [[Float]]
     let msgHz: Double
-    let flaggedHop: Int?
-    let cleanFalseFlag: Bool
-    let latencyMs: Double?
-    let peakMsgDbfs: Float
+    let cleanHops: Int       // hops whose window is entirely before onset
+    let onsetHop: Int        // first hop whose window reaches onset
 }
 
-func score(samples: [Float], msgHz: Double, tracker: FrequencyTracker, params: PrototypeParams) -> (Int?, Bool, Float) {
+func prepare(samples: [Float], msgHz: Double, config: AnalysisConfig, tracker: FrequencyTracker) -> PreparedClip {
     let fsp = tracker.fullScalePower
-    let binHz = config.sampleRate / Double(config.windowSize)
-    let msgBin = Int((msgHz / binHz).rounded())
-    let tol = max(msgHz * 0.03, 2 * binHz)
-    var detector = PrototypeAnomalyDetector(params: params)
     var window = [Float](repeating: 0, count: config.windowSize)
     let hopCount = max(0, samples.count / config.hopSize)
-    var flaggedHop: Int?
-    var cleanFalseFlag = false
-    var peakMsg: Float = -200
+    var spectra: [[Float]] = []; spectra.reserveCapacity(hopCount)
     let onsetSample = Int(onsetSeconds * config.sampleRate)
+    var cleanHops = 0, onsetHop = hopCount
     for hop in 0..<hopCount {
         window.removeFirst(config.hopSize)
         let start = hop * config.hopSize
         for i in 0..<config.hopSize { let idx = start+i; window.append(idx < samples.count ? samples[idx] : 0) }
-        guard var mags = tracker.spectrum(in: window) else { continue }
-        // Reference raw FFT power to full-scale -> the dBFS domain the thresholds expect.
-        for i in 0..<mags.count { mags[i] = fsp > 0 ? mags[i] / fsp : mags[i] }
-        if msgBin > 0 && msgBin < mags.count {
-            peakMsg = max(peakMsg, MagnitudeScaling.decibels(power: mags[msgBin]))
-        }
-        let cands = detector.process(magnitudes: mags, config: config)
-        let windowEndsBeforeOnset = (hop + 1) * config.hopSize <= onsetSample
-        if !cands.isEmpty && windowEndsBeforeOnset { cleanFalseFlag = true }
-        if flaggedHop == nil, cands.contains(where: { abs($0.frequencyHz - msgHz) <= tol }) {
-            flaggedHop = hop
-        }
+        var mags = tracker.spectrum(in: window) ?? [Float](repeating: 0, count: config.windowSize/2)
+        if fsp > 0 { for i in 0..<mags.count { mags[i] /= fsp } }
+        spectra.append(mags)
+        let windowEnd = (hop + 1) * config.hopSize
+        if windowEnd <= onsetSample { cleanHops += 1 }
+        if windowEnd > onsetSample && onsetHop == hopCount { onsetHop = hop }
     }
-    return (flaggedHop, cleanFalseFlag, peakMsg)
+    return PreparedClip(spectra: spectra, msgHz: msgHz, cleanHops: cleanHops, onsetHop: onsetHop)
+}
+
+// Returns (detected?, cleanFlaggedHops) for one prepared clip + params.
+func evaluate(_ clip: PreparedClip, config: AnalysisConfig, params: PrototypeParams) -> (Bool, Int) {
+    let binHz = config.sampleRate / Double(config.windowSize)
+    let tol = max(clip.msgHz * 0.03, 2 * binHz)
+    var det = PrototypeAnomalyDetector(params: params)
+    var detected = false, cleanFlagged = 0
+    for (hop, mags) in clip.spectra.enumerated() {
+        let cands = det.process(magnitudes: mags, config: config)
+        if hop < clip.cleanHops, !cands.isEmpty { cleanFlagged += 1 }
+        if hop >= clip.onsetHop, cands.contains(where: { abs($0.frequencyHz - clip.msgHz) <= tol }) { detected = true }
+    }
+    return (detected, cleanFlagged)
+}
+
+func baseParams(floorDb: Float, riseWindowHops: Int, riseDb: Float, margin: Float?) -> PrototypeParams {
+    var p = PrototypeParams.tuned
+    p.detectFloorDb = floorDb
+    p.riseWindowHops = max(2, riseWindowHops)
+    p.riseThresholdDb = riseDb
+    p.harmonicMarginDb = margin      // nil = binary gate
+    p.hotThresholdDb = -6            // unreachable on HCMS; rise gate does the work
+    return p
 }
 
 // --- main ---
 let dir = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : (NSHomeDirectory() + "/hcms-data")
 let files = (try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []
-let clips = files.filter { $0.hasSuffix(".wav") }.sorted()
-guard !clips.isEmpty else { print("No .wav in \(dir)"); exit(1) }
+let clipNames = files.filter { $0.hasSuffix(".wav") }.sorted()
+guard !clipNames.isEmpty else { print("No .wav in \(dir)"); exit(1) }
 
-let tracker = FrequencyTracker(config: config)
-var results: [ClipResult] = []
-for wav in clips {
-    let base = (wav as NSString).deletingPathExtension
-    guard let samples = loadWavMono16("\(dir)/\(wav)"),
-          let msg = msgFrequency(csvPath: "\(dir)/\(base).csv") else { print("skip \(wav)"); continue }
-    let (hop, clean, peak) = score(samples: samples, msgHz: msg, tracker: tracker, params: .tuned)
-    let lat: Double? = hop.map { Double(($0 + 1) * config.hopSize) / config.sampleRate * 1000 - onsetSeconds * 1000 }
-    results.append(ClipResult(name: base, msgHz: msg, flaggedHop: hop, cleanFalseFlag: clean, latencyMs: lat, peakMsgDbfs: peak))
-}
-
-print("\n=== HCMS validation — PrototypeParams.tuned, 16 kHz/2048/683 ===")
-print("clip                  MSG Hz  flagged  latency(from 8s)  clean-FP  peak MSG dBFS")
-for r in results {
-    let flagged = r.flaggedHop != nil ? "yes" : "NO"
-    let lat = r.latencyMs.map { String(format: "%+.0f ms", $0) } ?? "--"
-    print(r.name.padding(toLength: 20, withPad: " ", startingAt: 0)
-        + String(format: " %7.1f  %-7@  %-16@  %-8@  %6.1f", r.msgHz, flagged as NSString, lat as NSString, (r.cleanFalseFlag ? "FLAG" : "clean") as NSString, r.peakMsgDbfs))
-}
-let flaggedCount = results.filter { $0.flaggedHop != nil }.count
-let cleanFP = results.filter { $0.cleanFalseFlag }.count
-print(String(format: "\nflagged %d/%d | clean-program false-flags %d/%d | peak MSG level %.1f..%.1f dBFS",
-             flaggedCount, results.count, cleanFP, results.count,
-             results.map { $0.peakMsgDbfs }.min() ?? 0, results.map { $0.peakMsgDbfs }.max() ?? 0))
-
-// Load all clips once, then sweep parameter variants to see what recovers
-// detection on real, quiet, program-embedded howling.
-struct Clip { let samples: [Float]; let msg: Double }
-var loaded: [Clip] = []
-for wav in clips {
+struct Raw { let samples: [Float]; let msg: Double }
+var raws: [Raw] = []
+for wav in clipNames {
     let base = (wav as NSString).deletingPathExtension
     if let s = loadWavMono16("\(dir)/\(wav)"), let m = msgFrequency(csvPath: "\(dir)/\(base).csv") {
-        loaded.append(Clip(samples: s, msg: m))
+        raws.append(Raw(samples: s, msg: m))
     }
 }
-func sweep(_ label: String, _ p: PrototypeParams) {
-    var flagged = 0, cleanFP = 0
-    for c in loaded {
-        let (hop, clean, _) = score(samples: c.samples, msgHz: c.msg, tracker: tracker, params: p)
-        if hop != nil { flagged += 1 }
-        if clean { cleanFP += 1 }
+print("Loaded \(raws.count) HCMS clips from \(dir)\n")
+
+struct Result { let label: String; let det: Double; let faRate: Double }
+
+let configs: [(String, AnalysisConfig)] = [
+    ("win2048/hop683 (128ms/43ms)", AnalysisConfig(sampleRate: 16000, windowSize: 2048, hopSize: 683)),
+    ("win4096/hop683 (256ms/43ms)", AnalysisConfig(sampleRate: 16000, windowSize: 4096, hopSize: 683)),
+    ("win4096/hop1024 (256ms/64ms)", AnalysisConfig(sampleRate: 16000, windowSize: 4096, hopSize: 1024)),
+]
+let floors: [Float] = [-45, -40, -35]
+let riseMs: [Double] = [300, 500, 800]
+let riseDbs: [Float] = [3, 4, 6]
+let margins: [Float?] = [nil, 10, 15, 20, 33]
+
+var all: [Result] = []
+for (cfgLabel, config) in configs {
+    let tracker = FrequencyTracker(config: config)
+    let hopMs = Double(config.hopSize) / config.sampleRate * 1000
+    let prepared = raws.map { prepare(samples: $0.samples, msgHz: $0.msg, config: config, tracker: tracker) }
+    let n = Double(prepared.count)
+    for floor in floors {
+        for rMs in riseMs {
+            let rHops = Int((rMs / hopMs).rounded())
+            for rDb in riseDbs {
+                for margin in margins {
+                    let p = baseParams(floorDb: floor, riseWindowHops: rHops, riseDb: rDb, margin: margin)
+                    var detCount = 0.0, faSum = 0.0
+                    for clip in prepared {
+                        let (d, cf) = evaluate(clip, config: config, params: p)
+                        if d { detCount += 1 }
+                        if clip.cleanHops > 0 { faSum += Double(cf) / Double(clip.cleanHops) }
+                    }
+                    let mg = margin.map { "Sab\(Int($0))" } ?? "binary"
+                    let label = "\(cfgLabel) floor\(Int(floor)) rise\(Int(rMs))ms/\(Int(rDb))dB \(mg)"
+                    all.append(Result(label: label, det: detCount / n * 100, faRate: faSum / n * 100))
+                }
+            }
+        }
     }
-    print("  " + label.padding(toLength: 44, withPad: " ", startingAt: 0)
-        + "flagged \(flagged)/\(loaded.count)  clean-FP \(cleanFP)/\(loaded.count)")
 }
-print("\n=== parameter sweep on real HCMS ===")
-sweep("tuned (floor -25, rise 6, hot -6, gate on)", .tuned)
-var f35 = PrototypeParams.tuned; f35.detectFloorDb = -35; sweep("floor -35", f35)
-var f45 = PrototypeParams.tuned; f45.detectFloorDb = -45; sweep("floor -45", f45)
-var f45r4 = f45; f45r4.riseThresholdDb = 4; sweep("floor -45, rise 4", f45r4)
-var f45r3 = f45; f45r3.riseThresholdDb = 3; sweep("floor -45, rise 3", f45r3)
-var f45r3g = f45r3; f45r3g.harmonicGateEnabled = false; sweep("floor -45, rise 3, harmonic gate OFF", f45r3g)
-print("  --- Sabine harmonic margin (vs binary gate) ---")
-for margin: Float in [6, 10, 15, 20, 33] {
-    var p = f45r3; p.harmonicMarginDb = margin
-    sweep("floor -45, rise 3, Sabine margin \(Int(margin)) dB", p)
+
+// Frontier: best detection achievable at each false-alarm-rate ceiling.
+print("=== achievable detection vs. clean-program false-alarm rate (all 58 clips) ===")
+for faCap in [0.0, 0.5, 1.0, 2.0, 5.0, 10.0] {
+    let eligible = all.filter { $0.faRate <= faCap + 1e-9 }
+    if let best = eligible.max(by: { $0.det < $1.det }) {
+        print(String(format: "FA <= %4.1f%%  ->  best detection %5.1f%%  (FA %.2f%%)  |  %@",
+                     faCap, best.det, best.faRate, best.label as NSString))
+    } else {
+        print(String(format: "FA <= %4.1f%%  ->  (no combo)", faCap))
+    }
 }
-// best margin, tighter rise/floor combos
-for (fl, ri, mg) in [(-40, 4, 10), (-40, 6, 10), (-35, 4, 15), (-45, 3, 15)] as [(Float,Float,Float)] {
-    var p = PrototypeParams.tuned; p.detectFloorDb = fl; p.riseThresholdDb = ri; p.harmonicMarginDb = mg
-    sweep("floor \(Int(fl)), rise \(Int(ri)), Sabine \(Int(mg)) dB", p)
-}
+let bestDet = all.max(by: { $0.det < $1.det })!
+print(String(format: "\nabsolute max detection: %.1f%% (FA %.2f%%)  |  %@", bestDet.det, bestDet.faRate, bestDet.label as NSString))
