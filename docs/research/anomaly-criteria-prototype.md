@@ -42,8 +42,8 @@ properly.**
 |---|---|---|---|
 | **Detectability floor** | **−25 dBFS** | **[−30, −22] dBFS** | **Tight — the load-bearing knob.** Below it the hand-ramp false-flags; above it a ring case is missed. |
 | Rise amount | 6 dB / window | [4, 7] dB | Moderate. Below → over-fires; above → misses. |
-| Hotness level | −6 dBFS | [−12, −1] dBFS | Loose — anywhere between the moderate tone (−14) and the hot cases (−1). |
-| Fall-away margin | 8 dB | [2, 20] dB (all tested) | **Unconstrained** by the synthetic corpus — the room decay clears any value. A real steady-driven mode (#37) is what would pin it. |
+| Hotness level | −6 dBFS | **> −8 dBFS** (lower bound) | Lower-bounded (Step 1): a loud steady −8 dBFS tone pins it above −8. The soft −1 upper rests on the saturated case, which can't isolate the memory path (caveats) — a real *arrives-flat* howl (#35) is what would pin the top. |
+| Fall-away margin | 8 dB | **> ~7 dB** (lower bound only) | Lower-bounded (Step 1) by an *assumed* ~7 dB transient dip — a larger real fader pull could exceed 8 dB and wrongly release, and holding too long over-persists a settled mode, so the real dip magnitude and the upper bound both need real captures (#35). |
 | Rise window | 7 hops (~300 ms) | — | Fixed (not swept); the ~500 ms bar and detector cadence set it. |
 | Confirm | 2 hops | — | Anti-blip; fixed. |
 | Accelerating-shape lever | **off** | — | Not needed — and harmful (see below). |
@@ -93,13 +93,38 @@ The #21 spec named two optional levers. The scan says **hold both**:
   steady-driven mode that never rings down), which the synthetic tier doesn't
   contain — revisit against real captures (#37).
 
-## Binary vs. Sabine harmonic gate — deferred (as expected)
+## Binary vs. Sabine harmonic gate — decided (Step 1): keep binary
 
-The synthetic corpus is all single tones, so no case exercises harmonic
-isolation — binary exclusion and a Sabine-style margin behave identically here.
-The prototype keeps the existing **binary** gate; the choice genuinely can't be
-made until the real music/program cases (8, 9) exist, i.e. it belongs to **#37**,
-exactly as #21 anticipated.
+Originally deferred (the core corpus is all single tones). Step 1 added a
+harmonically-rich case — a **musical crescendo** (a rising fundamental at 500 Hz
+plus a 1/1.5/2 kHz harmonic series, `AnomalyCorpus.musicNoteCrescendo`). Two
+separate things are worth keeping distinct:
+
+- **What the case proves: the gate is load-bearing.** With the gate *off* the
+  rising fundamental trips the rise trigger and the note false-flags; with the
+  binary gate *on* it's correctly excluded (`harmonicGateIsLoadBearingForAMusicalCrescendo`,
+  `tunedRejectsTheMusicNote`). The case does **not**, by itself, distinguish
+  binary from Sabine — both pass the crescendo identically.
+- **What the *arithmetic* argues (not the case): binary ≈ Sabine *under this
+  floor*.** Sabine differs from binary only where a harmonic is a detectable peak
+  yet more than the margin (33 dB) below its fundamental. A harmonic that clears
+  the −25 dBFS candidate floor sits within 25 dB of a **≤ 0 dBFS** fundamental —
+  inside a 33 dB margin — so both gates exclude the same thing. **This holds only
+  while the premise does**, and it is conditional, not unconditional:
+  - **fundamental > 0 dBFS** (production references raw power to `fullScalePower`,
+    so a hot howl *can* read above 0 dBFS): e.g. a +10 dBFS fundamental with a
+    34 dB-down harmonic lands at −24 dBFS — detectable *and* beyond the margin, so
+    **binary and Sabine diverge** and Sabine is the more robust choice.
+  - a **lower detectability floor** (< −33 dBFS) or a **smaller margin** likewise
+    open a divergence gap.
+- **Decision: keep binary *for now*** — it's simpler and provably equivalent in
+  the ≤ 0 dBFS regime the synthetic cases live in. Revisit against real hot
+  feedback (#35): if real fundamentals read above the reference, switch to the
+  Sabine margin.
+- **Residual weakness (both gates):** a feedback tone with a *detectable* harmonic
+  (distorting chain) is suppressed by *either* gate. Feedback is normally a pure
+  tone (research §1), so it's an edge case — but it's exactly what real hot
+  feedback (#35) would expose.
 
 ## Caveats — what #37 must still confirm
 
@@ -119,13 +144,33 @@ exactly as #21 anticipated.
   these dB thresholds (as SPL/RTA already do); the prototype works in the
   harness's already-normalized units.
 
+## Step 1 (room-free extension) — what it pinned
+
+Since a real room is unavailable, the room-free part of #37 was done here by
+extending the synthetic tier (`AnomalyStepOneTests`, cases 8/12/13):
+
+- **Harmonic gate decided** — keep binary (above).
+- **Hotness lower-bounded** — a loud steady −8 dBFS tone must not hot-flag, pinning
+  the threshold above −8 (`loudSteadyTonePinsTheHotnessLowerBound`).
+- **Fall-away lower-bounded** — feedback must survive a ~7 dB transient dip, pinning
+  the margin above ~7 (`transientDipPinsTheFallAwayLowerBound`).
+
 ## Handoff
 
-- **#37** — score these params against the real-capture tier; confirm the
-  floor/rate separation survives real signals, and **pin the intents the
-  synthetic corpus left loose**: the fall-away margin (unconstrained here) and
-  the hotness level (wide band) need a real steady-driven mode and real hot
-  feedback to constrain. Settle the harmonic gate against real music/program.
-  Reopen the fluctuation lever only if a real steady-driven mode over-persists.
-- **#38** — implement the production detector from the pinned intents here,
-  referencing `fullScalePower`.
+- **#35 (real captures) — deferred, not blocking.** What still genuinely needs a
+  room: confirm the −25 dBFS floor + rate gate separate a *real* hand-ramp from a
+  *real* boomy-room bloom; pin the *upper* bounds Step 1 left open (fall-away vs.
+  a real steady-driven mode; the residual harmonic edge case with real hot
+  feedback); and a real noise-floor realism check. These are confirmations, not
+  open decisions.
+- **#38 — a *first* detector can ship, with eyes open.** What's pinned is the
+  structure (four-state + hotness), the false-positive-gating knobs (detectability
+  floor, rise amount, harmonic gate), and the *lower* bounds of hotness and
+  fall-away. What's **not** pinned is the *upper* bounds of hotness and fall-away —
+  and those gate the cardinal error (too-high hotness misses an arrives-flat howl;
+  too-large fall-away over-persists a settled mode). So #38 should ship with
+  **conservative defaults** on those two (the tuned −6 dBFS / 8 dB sit just inside
+  their known-good lower bounds) and treat real-capture tightening as required
+  follow-up, not optional polish. It still strictly improves on the current buggy
+  flat-or-growing rule (which false-flags any steady tone), so shipping is a net
+  win — but "fully validated" it is not.

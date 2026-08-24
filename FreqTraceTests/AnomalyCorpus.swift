@@ -40,17 +40,25 @@ nonisolated enum CorpusExpectation: Sendable {
     case mustNotFlag
 }
 
-/// One synthetic corpus case: a single tone at `targetHz` whose amplitude
-/// follows `envelope` (in [0, 1], 1.0 == full scale) over `durationSec`.
+/// One tone in a case's signal: a frequency plus its amplitude envelope
+/// (0...1, 1.0 == full scale) over time. A single-tone case has one; a
+/// musical note or a feedback-with-harmonics case has several.
+nonisolated struct ToneComponent: Sendable {
+    let hz: Double
+    let envelope: @Sendable (Double) -> Float
+}
+
+/// One synthetic corpus case: one or more tones (`components`), scored on the
+/// behaviour at `targetHz` -- the frequency the expectation is about.
 nonisolated struct CorpusCase: Sendable {
-    /// Corpus case number from the spec (1-10), for cross-referencing.
+    /// Corpus case number from the spec (1-10) or an extension number
+    /// (11+), for cross-referencing.
     let number: Int
     let name: String
     let targetHz: Double
     let durationSec: Double
     let expectation: CorpusExpectation
-    /// Amplitude (0...1) as a function of time in seconds.
-    let envelope: @Sendable (Double) -> Float
+    let components: [ToneComponent]
 
     /// Corpus case 6 lives on the same signal as case 4 (a room mode blooms
     /// then settles): case 4 asks it be flagged while building, case 6 asks
@@ -58,6 +66,7 @@ nonisolated struct CorpusCase: Sendable {
     /// checks the target is NOT flagged in the final hops.
     let mustClearByEnd: Bool
 
+    /// Single-tone case: the target tone follows `envelope`.
     init(
         number: Int,
         name: String,
@@ -67,13 +76,30 @@ nonisolated struct CorpusCase: Sendable {
         mustClearByEnd: Bool = false,
         envelope: @escaping @Sendable (Double) -> Float
     ) {
+        self.init(
+            number: number, name: name, targetHz: targetHz, durationSec: durationSec,
+            expectation: expectation, mustClearByEnd: mustClearByEnd,
+            components: [ToneComponent(hz: targetHz, envelope: envelope)]
+        )
+    }
+
+    /// Multi-tone case (harmonic series, feedback + spurious harmonics, …).
+    init(
+        number: Int,
+        name: String,
+        targetHz: Double,
+        durationSec: Double,
+        expectation: CorpusExpectation,
+        mustClearByEnd: Bool = false,
+        components: [ToneComponent]
+    ) {
         self.number = number
         self.name = name
         self.targetHz = targetHz
         self.durationSec = durationSec
         self.expectation = expectation
         self.mustClearByEnd = mustClearByEnd
-        self.envelope = envelope
+        self.components = components
     }
 }
 
@@ -183,6 +209,59 @@ nonisolated enum AnomalyCorpus {
         durationSec: 1.5,
         expectation: .mustNotFlag
     ) { _ in 0 }
+
+    // MARK: Step-1 extension cases (#37, room-free) -- pin the intents the
+    // synthetic core (cases 1-7,10) left loose. Kept OUT of `cases` so the
+    // core corpus's 7/7 (baseline #34, prototype #36) is unchanged; scored by
+    // their own tests.
+
+    /// Case 8 (the spec's sustained-music slot, here a synthetic stand-in): a
+    /// musical note that *crescendos* -- a rising fundamental with a full
+    /// harmonic series. Absent the harmonic gate its rising fundamental would
+    /// trip the rise trigger; the gate must keep it out. Must not flag.
+    static let musicNoteCrescendo: CorpusCase = {
+        let fundamental: @Sendable (Double) -> Float = { t in linearRamp(t: t, start: 0.02, peak: 0.35, rampSec: 0.8) }
+        func partial(_ scale: Float) -> @Sendable (Double) -> Float { { t in scale * fundamental(t) } }
+        return CorpusCase(
+            number: 8,
+            name: "Music note (crescendo + harmonics)",
+            targetHz: 500,
+            durationSec: 2.0,
+            expectation: .mustNotFlag,
+            components: [
+                ToneComponent(hz: 500, envelope: fundamental),
+                ToneComponent(hz: 1000, envelope: partial(0.5)),
+                ToneComponent(hz: 1500, envelope: partial(0.33)),
+                ToneComponent(hz: 2000, envelope: partial(0.2)),
+            ]
+        )
+    }()
+
+    /// Case 12: a deliberately loud but steady test tone (~-8 dBFS, flat) --
+    /// a tech running a hot check tone. Must not flag: it never rises, and it
+    /// must sit *below* the hotness trigger. Pins the hotness lower bound.
+    static let loudSteadyTone = CorpusCase(
+        number: 12,
+        name: "Loud steady test tone (-8 dBFS)",
+        targetHz: 1500,
+        durationSec: 2.0,
+        expectation: .mustNotFlag
+    ) { _ in 0.4 }   // 0.4^2 ≈ -8 dBFS
+
+    /// Case 13: saturated feedback that briefly ducks near the end (a ~7 dB
+    /// dip, e.g. someone momentarily pulls the fader) then would hold -- still
+    /// feedback, must stay flagged through the dip. Pins the fall-away lower
+    /// bound: the margin must exceed a transient dip.
+    static let feedbackWithDip = CorpusCase(
+        number: 13,
+        name: "Saturated feedback with a transient dip",
+        targetHz: 1000,
+        durationSec: 2.0,
+        expectation: .mustFlag(withinMs: nil)
+    ) { t in
+        let rung = expEnvelope(t: t, start: 0.1, tau: 0.12, ceiling: 0.9)   // ~-0.9 dBFS held
+        return t > 1.4 ? 0.4 : rung                                          // dip to ~-8 dBFS (~7 dB) at the end
+    }
 
     // MARK: Envelope builders
 

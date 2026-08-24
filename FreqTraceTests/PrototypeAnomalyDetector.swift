@@ -53,6 +53,10 @@ nonisolated struct PrototypeParams: Sendable {
     var fallAwayDb: Float
     /// Missed frames tolerated before a track is dropped (bin-boundary flicker).
     var releaseFrameCount: Int
+    /// Whether the binary harmonic-exclusion gate is applied. Only used to
+    /// demonstrate the gate is load-bearing (a rising musical note flags with
+    /// it off, not on); production keeps it on.
+    var harmonicGateEnabled: Bool = true
 
     /// The plain "climb now, shape later" rule -- no accelerating-shape check.
     static let simpleClimb = PrototypeParams(
@@ -113,7 +117,7 @@ nonisolated struct PrototypeAnomalyDetector {
         // Narrowband + harmonically-unrelated peaks above the candidate floor.
         let peaks = PeakFinder.findPeaks(magnitudes: magnitudes, config: config)
         let candidatePeaks = peaks
-            .filter { !HarmonicRelation.isHarmonicallyRelated($0, to: peaks) }
+            .filter { !params.harmonicGateEnabled || !HarmonicRelation.isHarmonicallyRelated($0, to: peaks) }
             .filter { MagnitudeScaling.decibels(power: magnitudes[$0.bin]) >= params.detectFloorDb }
 
         var matchedKeys = Set<Int>()
