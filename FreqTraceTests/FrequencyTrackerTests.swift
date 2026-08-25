@@ -263,6 +263,40 @@ struct FrequencyTrackerTests {
         #expect(level > -20)
     }
 
+    @Test func trackedFrequencyLevelIsWeightedNotRaw() throws {
+        // Regression (peak-crosshair review): the level must be on the
+        // *weighted* basis -- the same value the argmax selected on, and the
+        // same basis SPL (weightedLevelDb), the RTA bars, and the hover
+        // tooltip all report on (they read the A-weighted display spectrum).
+        // Reporting the raw bin power made the level read up to ~20dB hot in
+        // the lows under A/C weighting (A-weighting rolls off ~30dB at 50Hz),
+        // so the crosshair's level line floated well above the RTA bar at the
+        // tracked frequency. Before the fix aLevel == zLevel (both raw).
+        let tracker = FrequencyTracker(config: config)
+        let samples = sineWave(frequency: 50, amplitude: 1.0, sampleRate: config.sampleRate, count: config.windowSize)
+        let magnitudes = try #require(tracker.spectrum(in: samples))
+
+        let zLevel = try #require(tracker.trackedFrequencyLevelDb(fromMagnitudes: magnitudes, weighting: .z))
+        let aLevel = try #require(tracker.trackedFrequencyLevelDb(fromMagnitudes: magnitudes, weighting: .a))
+
+        #expect(aLevel < zLevel - 1.0)
+    }
+
+    @Test func trackedFrequencyLevelAgreesAcrossWeightingsAt1kHz() throws {
+        // A/C-weighting are unity at 1kHz (Weighting), so a 1kHz tone's
+        // tracked level reads about the same regardless of weighting -- the
+        // other half of trackedFrequencyLevelIsWeightedNotRaw, confirming the
+        // gain applied is the correct per-bin one, not a blanket offset.
+        let tracker = FrequencyTracker(config: config)
+        let samples = sineWave(frequency: 1000, amplitude: 1.0, sampleRate: config.sampleRate, count: config.windowSize)
+        let magnitudes = try #require(tracker.spectrum(in: samples))
+
+        let zLevel = try #require(tracker.trackedFrequencyLevelDb(fromMagnitudes: magnitudes, weighting: .z))
+        let aLevel = try #require(tracker.trackedFrequencyLevelDb(fromMagnitudes: magnitudes, weighting: .a))
+
+        #expect(abs(zLevel - aLevel) < 0.5)
+    }
+
     @Test func trackedFrequencyLevelIsNilWhenSpectrumHasOnlyTheDCBin() {
         // Mirrors trackedFrequency(fromMagnitudes:weighting:)'s own nil
         // case: bin 0 (DC) is skipped as not a meaningful frequency, so a
