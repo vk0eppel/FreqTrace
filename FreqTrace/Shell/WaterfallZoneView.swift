@@ -383,7 +383,11 @@ struct WaterfallZoneView: View {
         return Button {
             pipeline.frequencyScale = scale
         } label: {
-            Text(scale.label)
+            // Uppercased at the display site to match displayModeButton's
+            // WATERFALL/RTA -- the two peer toggles sit adjacent in the #30
+            // cluster, so their casing must agree (FrequencyScale.label stays
+            // title-case for any other, non-toggle use).
+            Text(scale.label.uppercased())
                 .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
                 .padding(.horizontal, 6)
                 .padding(.vertical, 3)
