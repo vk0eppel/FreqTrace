@@ -76,9 +76,7 @@ struct WaterfallZoneView: View {
             }
             hoverOverlay
             peakCrosshair
-            displayModeToggle
-            bandingResolutionControl
-            frequencyScaleControl
+            graphControlsCluster
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipped()
@@ -284,18 +282,39 @@ struct WaterfallZoneView: View {
         return "\(freq)  \(Int(db.rounded())) dB"
     }
 
-    private var displayModeToggle: some View {
+    // The graph zone's three display controls (ticket #30), consolidated
+    // into one aligned top-right cluster: the Waterfall/RTA view toggle, the
+    // banding-resolution picker, and the Octave/Decade frequency scale. They
+    // were previously three separately-backgrounded pills stacked with
+    // hardcoded per-control top offsets (10/50/86pt) and ragged left edges,
+    // reading as three scattered objects; now one recessed panel, one
+    // top-right anchor, consistent styling. All three affect both the
+    // waterfall and RTA (view toggle switches which is shown; banding + scale
+    // apply to both), so they belong together regardless of displayMode.
+    // Compact form (user pick): the 7-way banding is a `1/12 ▾` dropdown
+    // rather than 7 always-visible segments, matching the app's device/ISO
+    // picker idiom and keeping the panel narrow over the waterfall; the two
+    // 2-way toggles stay one-tap segments.
+    private var graphControlsCluster: some View {
         VStack {
             HStack {
                 Spacer()
-                HStack(spacing: 0) {
-                    ForEach(GraphDisplayMode.allCases) { mode in
-                        displayModeButton(mode)
+                VStack(alignment: .leading, spacing: 5) {
+                    HStack(spacing: 0) {
+                        ForEach(GraphDisplayMode.allCases) { mode in
+                            displayModeButton(mode)
+                        }
+                    }
+                    bandingResolutionDropdown
+                    HStack(spacing: 4) {
+                        ForEach(FrequencyScale.allCases) { scale in
+                            frequencyScaleButton(scale)
+                        }
                     }
                 }
-                .padding(3)
+                .padding(6)
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
+                    RoundedRectangle(cornerRadius: 8)
                         .fill(theme.surfaceRaised.opacity(0.9))
                 )
                 .padding(10)
@@ -304,57 +323,58 @@ struct WaterfallZoneView: View {
         }
     }
 
-    // Octave-banding resolution (user request: "relative to octaves, from
-    // 48 per octave to 1 per octave," then "the same for the waterfall" --
-    // one shared setting for both views, confirmed with user, not an
-    // independent control per view). Lives here in the graph zone rather
-    // than the Controls row, same reasoning CLAUDE.md already gives for
-    // the Waterfall/RTA toggle itself living here; shown regardless of
-    // displayMode since it now affects both.
-    private var bandingResolutionControl: some View {
-        VStack {
-            HStack {
-                Spacer()
-                HStack(spacing: 4) {
-                    ForEach(RTABandingResolution.allCases) { resolution in
-                        bandingResolutionButton(resolution)
+    // Banding-resolution picker as a dropdown (ticket #30 compact form) --
+    // the same SwiftUI Menu idiom as the Input/Output Device and ISO-band
+    // pickers, over RTABandingResolution.allCases, with a checkmark on the
+    // active resolution. A leading "BANDS" caption names it (the two toggles
+    // are self-labelling by their segment text; the dropdown value alone --
+    // "1/12" -- isn't). Shared by RTA and the waterfall alike, same setting.
+    private var bandingResolutionDropdown: some View {
+        HStack(spacing: 6) {
+            Text("BANDS")
+                .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
+                .foregroundStyle(theme.textDim)
+            Menu {
+                ForEach(RTABandingResolution.allCases) { resolution in
+                    Button {
+                        pipeline.bandingResolution = resolution
+                    } label: {
+                        if resolution == pipeline.bandingResolution {
+                            Label(resolution.label, systemImage: "checkmark")
+                        } else {
+                            Text(resolution.label)
+                        }
                     }
                 }
-                .padding(3)
-                .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(theme.surfaceRaised.opacity(0.9))
-                )
-                .padding(.trailing, 10)
-            }
-            .padding(.top, 50)
-            Spacer()
-        }
-    }
-
-    // Frequency-scale picker (issue #25): Octave vs the REW/Smaart-style
-    // Decade grid. A display-only choice affecting the axis labels of both
-    // the waterfall and RTA, so it lives in the graph zone (like the banding
-    // picker) and shows regardless of displayMode. Stacked just below the
-    // banding control; placement confirmed by screenshot.
-    private var frequencyScaleControl: some View {
-        VStack {
-            HStack {
-                Spacer()
+            } label: {
+                // Flat console pill (ticket #30 design pass), not the native
+                // Menu bezel: the cluster's two toggles are flat accent-fill
+                // segments, so a stock system pull-down beside them read as a
+                // different control *material*. A recessed theme.surface pill
+                // with a trailing chevron matches the segments' flatness while
+                // still reading as "opens a list". .menuStyle(.button) +
+                // .buttonStyle(.plain) render the custom label as-is (no
+                // bezel); .menuIndicator(.hidden) drops Menu's own chevron so
+                // only this trailing one shows, on the correct (right) side.
                 HStack(spacing: 4) {
-                    ForEach(FrequencyScale.allCases) { scale in
-                        frequencyScaleButton(scale)
-                    }
+                    Text(pipeline.bandingResolution.label)
+                        .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
+                        .foregroundStyle(theme.text)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: Typography.axisLabelSize - 2, weight: .semibold))
+                        .foregroundStyle(theme.textDim)
                 }
-                .padding(3)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
                 .background(
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(theme.surfaceRaised.opacity(0.9))
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(theme.surface)
                 )
-                .padding(.trailing, 10)
             }
-            .padding(.top, 86)
-            Spacer()
+            .menuStyle(.button)
+            .buttonStyle(.plain)
+            .menuIndicator(.hidden)
+            .fixedSize()
         }
     }
 
@@ -376,33 +396,19 @@ struct WaterfallZoneView: View {
         .buttonStyle(.plain)
     }
 
-    private func bandingResolutionButton(_ resolution: RTABandingResolution) -> some View {
-        let isSelected = pipeline.bandingResolution == resolution
-        return Button {
-            pipeline.bandingResolution = resolution
-        } label: {
-            Text(resolution.label)
-                .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
-                .padding(.horizontal, 6)
-                .padding(.vertical, 3)
-                .foregroundStyle(isSelected ? theme.bg : theme.textDim)
-                .background(
-                    RoundedRectangle(cornerRadius: 4)
-                        .fill(isSelected ? theme.accent : Color.clear)
-                )
-        }
-        .buttonStyle(.plain)
-    }
-
     private func displayModeButton(_ mode: GraphDisplayMode) -> some View {
         let isSelected = displayMode == mode
         return Button {
             displayMode = mode
         } label: {
+            // 10pt mono, matching frequencyScaleButton -- the whole cluster
+            // speaks the graph's own axis-label type system (ticket #30
+            // design pass), not a transplanted 12pt Controls-row fragment,
+            // so it reads as one quiet element beside the frequency labels.
             Text(mode.rawValue.uppercased())
-                .font(.system(size: Typography.controlSize, weight: .semibold))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
+                .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
+                .padding(.horizontal, 6)
+                .padding(.vertical, 3)
                 .foregroundStyle(isSelected ? theme.bg : theme.textDim)
                 .background(
                     RoundedRectangle(cornerRadius: 4)
