@@ -152,7 +152,18 @@ nonisolated final class FrequencyTracker: @unchecked Sendable {
     func trackedFrequencyLevelDb(fromMagnitudes magnitudes: [Float], weighting: Weighting) -> Double? {
         guard let bestBin = bestWeightedBin(fromMagnitudes: magnitudes, weighting: weighting) else { return nil }
         guard fullScalePower > 0 else { return -Double.infinity }
-        return Double(MagnitudeScaling.decibels(power: magnitudes[bestBin] / fullScalePower))
+        // Apply the winning bin's weighting gain -- the same weighted value the
+        // argmax selected on, and the same basis SPL (weightedLevelDb), the RTA
+        // bars, and the hover tooltip all report on (they read the A-weighted
+        // display spectrum). Reporting the *raw* bin power here contradicted
+        // this function's own "same scale as ... the RTA bars" contract: under
+        // A/C weighting the level read up to ~20dB hot in the lows (where
+        // A-weighting rolls off ~19dB at 100Hz), so the peak-crosshair's level
+        // line floated well above the RTA bar at the tracked frequency. Under
+        // Z-weighting (flat gain) this is unchanged.
+        let table = gainTables[weighting] ?? []
+        let gain = bestBin < table.count ? table[bestBin] : 1
+        return Double(MagnitudeScaling.decibels(power: magnitudes[bestBin] * gain / fullScalePower))
     }
 
     /// Applies `weighting`'s per-bin gain across the whole spectrum
