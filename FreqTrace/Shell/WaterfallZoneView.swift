@@ -75,6 +75,7 @@ struct WaterfallZoneView: View {
                 emptyStateOverlay
             }
             hoverOverlay
+            peakCrosshair
             displayModeToggle
             bandingResolutionControl
             frequencyScaleControl
@@ -212,6 +213,75 @@ struct WaterfallZoneView: View {
     // Anomaly Candidate rows.
     private func formattedHoverFrequency(_ hz: Double) -> String {
         hz >= 1000 ? String(format: "%.2f kHz", hz / 1000) : String(format: "%.0f Hz", hz)
+    }
+
+    // Peak crosshair (ticket #28): an always-on marker at the currently-
+    // tracked peak frequency, so the eye can find the tracked bin on the
+    // graph itself, not just read it in the numeric row. A vertical line at
+    // the tracked frequency in both modes (the shared log-frequency x-axis);
+    // in RTA, additionally a horizontal line at the tracked level, since
+    // RTA's Y axis is dB -- the waterfall's Y is time, so there's no level
+    // axis to mark there (vertical-only). Reads the same freezeGate-gated
+    // pipeline.trackedFrequencyHz/LevelDb the hero numeric reads, so it
+    // freezes with the display, hides on Stop/empty, and can never disagree
+    // with the number (same value, no independent smoothing). Line color is
+    // theme.text at a higher opacity than the axis gridlines (0.18) --
+    // brighter than the grid in Dark, darker in Light (user request) -- so
+    // it reads as a distinct marker without a new hue competing with the
+    // color ramp or the anomaly-candidate emphasis. Label reuses the hover
+    // tooltip's formatter. Non-interactive, so it never blocks the toggles.
+    private var peakCrosshair: some View {
+        GeometryReader { proxy in
+            if pipeline.hasWaterfallData, let hz = pipeline.trackedFrequencyHz {
+                let topInset: CGFloat = 12
+                let bottomInset: CGFloat = 28
+                let usableHeight = proxy.size.height - topInset - bottomInset
+                let x = proxy.size.width * FrequencyAxis.normalizedPosition(forHz: hz)
+                // Vertical frequency line (both modes), inset top/bottom to
+                // match the axis label rows rather than running under them.
+                Rectangle()
+                    .fill(theme.text.opacity(0.55))
+                    .frame(width: 1.5, height: max(usableHeight, 0))
+                    .position(x: x, y: topInset + max(usableHeight, 0) / 2)
+                // Horizontal level line (RTA only). Same -120…0dB normalized
+                // mapping dbAxisLabels uses, so the line meets its own dB
+                // gridline exactly. Dashed (vs. the solid vertical line) so it
+                // doesn't read as another of RTA's solid white per-bar peak-
+                // hold caps -- a dashed span is the conventional "reference
+                // level" mark and stays legible even where it sits above/below
+                // a bar top (the Tracked-Frequency level is a single loudest
+                // bin, not the binned per-band bar, so the two legitimately
+                // differ).
+                if displayMode == .rta, usableHeight > 0,
+                   let db = pipeline.trackedFrequencyLevelDb, db.isFinite {
+                    let normalized = (Float(db) - MagnitudeScaling.floorDb)
+                        / (MagnitudeScaling.ceilingDb - MagnitudeScaling.floorDb)
+                    let clamped = min(max(normalized, 0), 1)
+                    let y = topInset + usableHeight * CGFloat(1 - clamped)
+                    Path { path in
+                        path.move(to: CGPoint(x: 0, y: y))
+                        path.addLine(to: CGPoint(x: proxy.size.width, y: y))
+                    }
+                    .stroke(theme.text.opacity(0.55), style: StrokeStyle(lineWidth: 1.5, dash: [5, 4]))
+                }
+                // Hover-style label near the top of the line, clamped in-bounds.
+                axisLabel(crosshairLabel(hz: hz, db: pipeline.trackedFrequencyLevelDb))
+                    .position(
+                        x: min(max(x, endpointLabelInset + 24), proxy.size.width - endpointLabelInset - 24),
+                        y: topInset + 8
+                    )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    // Same content as the hover tooltip (hoverText), but fed the tracked
+    // freq/level instead of the mouse position -- so the crosshair reads in
+    // the same "2340 Hz  -18 dB" form the rest of the graph does.
+    private func crosshairLabel(hz: Double, db: Double?) -> String {
+        let freq = formattedHoverFrequency(hz)
+        guard let db, db.isFinite else { return freq }
+        return "\(freq)  \(Int(db.rounded())) dB"
     }
 
     private var displayModeToggle: some View {
