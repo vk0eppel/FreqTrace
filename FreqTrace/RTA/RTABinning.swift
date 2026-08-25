@@ -27,18 +27,36 @@ nonisolated enum RTABinning {
     /// stage is O(points): the RTA's smoothing ease + envelope path + peak
     /// lookups, and apply()'s per-bar peak-tracker writes -- run continuously
     /// at display rate because Time Avg None never lets the display converge.
-    /// A screen can't resolve more points than it has pixels, so bins are
-    /// grouped into at most this many contiguous, peak-preserving bands
-    /// (max over each group, so no narrow peak is hidden) -- visually the
-    /// same continuous curve, with bounded cost. 1024 is comfortably finer
-    /// than any display width the app runs at (min window 1280pt) yet ~7x
-    /// cheaper than one-per-bin at 16k.
+    /// A screen can't resolve more points than it has pixels. Now a **safety
+    /// ceiling** rather than the primary mechanism: `narrowbandBinGroups`
+    /// groups log-aware (see there) and stays well under this at every FFT
+    /// size by construction, but the constant is kept as an invariant the
+    /// tests assert against. 1024 is comfortably finer than any display width
+    /// the app runs at (min window 1280pt) yet ~7x cheaper than one-per-bin
+    /// at 16k.
     static let maxNarrowbandBars = 1024
 
-    /// Contiguous FFT-bin groups for the None/narrowband case, capped at
-    /// `maxNarrowbandBars`. Below the cap (small FFT sizes) each group is a
-    /// single bin -- true raw resolution; above it, bins are evenly grouped
-    /// so the display-point count stays bounded. Shared by both `bandEdges`
+    /// Minimum log-frequency span of a None/narrowband display point: a
+    /// 1/96-octave step -- finer than the finest banded resolution (1/48),
+    /// so None mode always stays strictly more detailed than any banded view.
+    /// Bins are merged only where they pack tighter than this; where a single
+    /// bin already spans more (the low end), each bin shows individually.
+    static let narrowbandStepRatio = pow(2.0, 1.0 / 96.0)
+
+    /// Contiguous FFT-bin groups for the None/narrowband case, grouped
+    /// **log-aware**: every raw bin is its own group where bins are sparser
+    /// than one `narrowbandStepRatio` log-step (the low/mid end, where each
+    /// bin spans real width on the log axis and deserves to show), and bins
+    /// merge (peak-preserving) only where they pack tighter than that (the
+    /// high end, thousands of bins per octave). This replaced a flat
+    /// `maxNarrowbandBars` cap that grouped uniformly *in Hz* -- which, on a
+    /// log display, grouped the low end (only a handful of bins, all visible)
+    /// just as hard as the high end, collapsing e.g. 20-44Hz into a single
+    /// bar at the 8k default (user report). The log-aware budget stays well
+    /// under `maxNarrowbandBars` at every FFT size (~140 individual low bins
+    /// -- an FFT-size-invariant count -- plus <=96 groups/octave above the
+    /// crossover), so it's *cheaper* than the old flat cap while showing full
+    /// raw resolution where it's actually legible. Shared by both `bandEdges`
     /// (positions) and `bars` (values) so their counts and ordering are
     /// identical by construction. Bin 0 (DC) is excluded; only bins whose
     /// center falls inside `[minHz, maxHz]` are grouped.
@@ -49,14 +67,22 @@ nonisolated enum RTABinning {
         let lastBin = min(maxBin, Int((maxHz / binHz).rounded(.down)))
         guard lastBin >= firstBin else { return [] }
 
-        let totalBins = lastBin - firstBin + 1
-        if totalBins <= maxNarrowbandBars {
-            return (firstBin...lastBin).map { ($0, $0) }
+        var groups: [(lowerBin: Int, upperBin: Int)] = []
+        var lo = firstBin
+        while lo <= lastBin {
+            // Extend the group upward while the next bin still falls within one
+            // log-step of the group's start. Low end: one bin already exceeds
+            // the step, so each group is a single bin (full raw resolution).
+            // High end: many bins fit, so they merge to ~one step wide.
+            let groupCeilingHz = Double(lo) * binHz * narrowbandStepRatio
+            var hi = lo
+            while hi < lastBin && Double(hi + 1) * binHz < groupCeilingHz {
+                hi += 1
+            }
+            groups.append((lo, hi))
+            lo = hi + 1
         }
-        let groupSize = Int((Double(totalBins) / Double(maxNarrowbandBars)).rounded(.up))
-        return stride(from: firstBin, through: lastBin, by: groupSize).map { lo in
-            (lo, min(lo + groupSize - 1, lastBin))
-        }
+        return groups
     }
 
     /// Memoizes bandEdges(barsPerOctave:) (perf fix -- user request "reduce
