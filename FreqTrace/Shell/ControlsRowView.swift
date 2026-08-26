@@ -265,6 +265,12 @@ struct ControlsRowView: View {
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(isSelected ? theme.text : theme.textDim)
             }
+            // Make the whole label frame tappable, including the gap between
+            // the LED and the glyph -- .buttonStyle(.plain) otherwise
+            // hit-tests only the opaque LED + text, so taps landing in the
+            // spacing (or the slack around a short glyph) fall through and
+            // miss the selection (user report).
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -312,6 +318,7 @@ struct ControlsRowView: View {
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(isFrozen ? theme.text : theme.textDim)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -331,6 +338,7 @@ struct ControlsRowView: View {
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(isActive ? theme.danger : theme.textDim)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -368,6 +376,7 @@ struct ControlsRowView: View {
                     .font(.system(size: Typography.controlSize, weight: .semibold, design: .monospaced))
                     .foregroundStyle(isSelected ? theme.text : theme.textDim)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -405,6 +414,7 @@ struct ControlsRowView: View {
                     .font(.system(size: Typography.controlSize, weight: .semibold, design: .monospaced))
                     .foregroundStyle(isSelected ? theme.text : theme.textDim)
             }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
