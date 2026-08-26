@@ -102,19 +102,23 @@ struct RTAView: View {
     /// so per-bar draw calls are fine.
     private func drawBars(context: GraphicsContext, size: CGSize, positions: [RTABarPositionCache.BarPosition]) {
         let gap: CGFloat = 2
+        // Bars map into the shared inset plot (GraphPlotMetrics), not full
+        // canvas height, so they sit at the same vertical position as the
+        // combined-view overlay curve and line up with the dB axis labels.
+        let baseline = GraphPlotMetrics.y(forNormalized: 0, height: size.height)
         for (index, normalized) in displayedBars.enumerated() {
             guard index < positions.count else { break }
             let position = positions[index]
             let xStart = position.start * size.width
             let xEnd = position.end * size.width
             let barWidth = max(1, xEnd - xStart - gap)
-            let barHeight = size.height * CGFloat(normalized)
-            let rect = CGRect(x: xStart, y: size.height - barHeight, width: barWidth, height: barHeight)
+            let topY = GraphPlotMetrics.y(forNormalized: normalized, height: size.height)
+            let rect = CGRect(x: xStart, y: topY, width: barWidth, height: max(0, baseline - topY))
             let path = Path(roundedRect: rect, cornerSize: CGSize(width: 2, height: 2))
             context.fill(path, with: .color(theme.accent))
 
             if let peak = pipeline.peakForRTABar(index) {
-                let peakY = size.height - size.height * CGFloat(peak)
+                let peakY = GraphPlotMetrics.y(forNormalized: peak, height: size.height)
                 var peakLine = Path()
                 peakLine.move(to: CGPoint(x: xStart, y: peakY))
                 peakLine.addLine(to: CGPoint(x: xStart + barWidth, y: peakY))
@@ -132,14 +136,16 @@ struct RTAView: View {
         let count = min(displayedBars.count, positions.count)
         guard count > 0 else { return }
         func centerX(_ i: Int) -> CGFloat { CGFloat((positions[i].start + positions[i].end) / 2) * size.width }
-        func topY(_ v: Float) -> CGFloat { size.height - size.height * CGFloat(v) }
+        // Same shared inset mapping as drawBars / the overlay curve.
+        func topY(_ v: Float) -> CGFloat { GraphPlotMetrics.y(forNormalized: v, height: size.height) }
+        let baseline = GraphPlotMetrics.y(forNormalized: 0, height: size.height)
 
         var envelope = Path()
-        envelope.move(to: CGPoint(x: centerX(0), y: size.height))
+        envelope.move(to: CGPoint(x: centerX(0), y: baseline))
         for i in 0..<count {
             envelope.addLine(to: CGPoint(x: centerX(i), y: topY(displayedBars[i])))
         }
-        envelope.addLine(to: CGPoint(x: centerX(count - 1), y: size.height))
+        envelope.addLine(to: CGPoint(x: centerX(count - 1), y: baseline))
         envelope.closeSubpath()
         context.fill(envelope, with: .color(theme.accent))
 
@@ -214,8 +220,12 @@ struct RTAView: View {
 /// barsPerOctave -- at 1/48 octave that was ~1000 log evaluations per
 /// frame. At most a handful of resolutions ever get cached, so the cache
 /// is never evicted.
+// Internal (not private) so the #45 combined-overlay curve in
+// WaterfallZoneView reuses the exact same band x-positions the standalone
+// bars use -- one source of truth, and no second copy of the per-band
+// log-position math.
 @MainActor
-private enum RTABarPositionCache {
+enum RTABarPositionCache {
     struct BarPosition {
         let start: CGFloat
         let end: CGFloat

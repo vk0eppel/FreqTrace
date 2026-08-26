@@ -5,30 +5,41 @@
 //  The dominant Waterfall/RTA zone. Real Metal rendering (ADR 0004, ticket
 //  #8) with log-frequency axis labels along the bottom and time-axis
 //  gridlines along the left, per CLAUDE.md "Primary view -- spectrogram/
-//  waterfall". RTA (ticket #11, CLAUDE.md "RTA") is a second, mutually
-//  exclusive rendering of the same live pipeline.latestMagnitudes stream --
-//  switching the toggle never touches capture/start/stop, only which view
-//  reads the already-flowing data, so both views stay live regardless of
-//  which is shown (the AC's "without interrupting the underlying data
-//  stream"). The toggle lives in this zone's top-right corner, not the
-//  Controls row (CONTEXT.md "Controls row": "it's about that view
-//  specifically").
+//  waterfall". RTA (ticket #11, CLAUDE.md "RTA") is a second rendering of
+//  the same live pipeline.latestMagnitudes stream. The Waterfall and RTA are
+//  independent on/off layers (#45, GraphLayers), not a mutually-exclusive
+//  pick: either alone, or both at once -- the combined view, where the RTA
+//  draws as a floating dB curve over the scrolling waterfall (rtaOverlayCurve,
+//  treatment B). Toggling layers never touches capture/start/stop, only which
+//  views read the already-flowing data, so all layers stay live regardless of
+//  what's shown (the AC's "without interrupting the underlying data stream").
+//  The layer toggles live in this zone's top-right corner, not the Controls
+//  row (CONTEXT.md "Controls row": "it's about that view specifically").
 //
 
 import MetalKit
 import SwiftUI
 
+// Still an enum for iterating the two toggle segments in the graph-controls
+// cluster (their labels are its rawValues). What each segment *does* changed
+// with #45: they're no longer a mutually-exclusive pick but independent
+// on/off toggles over GraphLayers -- `layer` maps each segment to the layer
+// it lights.
 enum GraphDisplayMode: String, CaseIterable, Identifiable {
     case waterfall = "Waterfall"
     case rta = "RTA"
 
     var id: String { rawValue }
+
+    var layer: GraphLayers { self == .waterfall ? .waterfall : .rta }
 }
 
 struct WaterfallZoneView: View {
     @Environment(\.theme) private var theme
     @Environment(AudioPipelineViewModel.self) private var pipeline
-    @State private var displayMode: GraphDisplayMode = .waterfall
+    // Independent on/off layers (#45), default waterfall-only (matches the
+    // prior single-mode default). Both lit = the combined overlay.
+    @State private var layers: GraphLayers = .waterfall
     /// Owned here rather than inside MetalWaterfallView's makeCoordinator()
     /// (hover tooltip feature) so hoverReadout(at:size:) can query the same
     /// instance's magnitudeDb(secondsAgo:hz:) that's writing the GPU
@@ -55,21 +66,34 @@ struct WaterfallZoneView: View {
 
     var body: some View {
         ZStack {
-            switch displayMode {
-            case .waterfall:
-                if let waterfallRenderer {
-                    MetalWaterfallView(
-                        renderer: waterfallRenderer,
-                        appearanceMode: theme.mode,
-                        isActive: pipeline.isCaptureActive && !pipeline.isFrozen
-                    )
-                }
-                frequencyAxisLabels
-                timeAxisLabels
-            case .rta:
+            // Waterfall layer (back). Present whenever its toggle is lit,
+            // regardless of the RTA layer -- both can be on at once (#45).
+            if layers.showsWaterfall, let waterfallRenderer {
+                MetalWaterfallView(
+                    renderer: waterfallRenderer,
+                    appearanceMode: theme.mode,
+                    isActive: pipeline.isCaptureActive && !pipeline.isFrozen
+                )
+            }
+            // RTA as its standalone bar chart only when it's the sole layer;
+            // with the waterfall underneath it renders as the floating curve
+            // overlay instead (rtaOverlayCurve, below).
+            if layers.showsStandaloneRTA {
                 RTAView()
-                frequencyAxisLabels
+            }
+            frequencyAxisLabels
+            // Left-edge axis: time when the waterfall is shown. When both
+            // layers are on, the RTA's dB axis moves to the *right* edge
+            // (dbAxisLabelsOverlay) so the dual-Y reads unmistakably --
+            // seconds on the left, dB on the right.
+            if layers.showsWaterfall {
+                timeAxisLabels
+            } else if layers.showsRTA {
                 dbAxisLabels
+            }
+            if layers.showsOverlayRTA {
+                rtaOverlayCurve
+                dbAxisLabelsOverlay
             }
             if !pipeline.hasWaterfallData {
                 emptyStateOverlay
@@ -82,9 +106,12 @@ struct WaterfallZoneView: View {
         .clipped()
         .onAppear {
             guard shortcutMonitor == nil else { return }
+            // w/r now *toggle* their layer rather than select one exclusive
+            // mode (#45), subject to the same at-least-one-on guard as the
+            // cluster buttons (toggling off the only lit layer is a no-op).
             shortcutMonitor = KeyboardShortcuts.install([
-                "w": { displayMode = .waterfall },
-                "r": { displayMode = .rta },
+                "w": { layers = layers.toggling(.waterfall) },
+                "r": { layers = layers.toggling(.rta) },
             ])
         }
         .onDisappear {
@@ -155,8 +182,11 @@ struct WaterfallZoneView: View {
         guard size.width > 0, size.height > 0 else { return nil }
         let hz = FrequencyAxis.hz(atNormalizedPosition: Double(point.x / size.width))
 
-        switch displayMode {
-        case .waterfall:
+        // When both layers are on the plot is the waterfall (the RTA is a
+        // thin overlay curve on top), so hover reports the waterfall's
+        // time/dB at that point; RTA-only reports the bar's dB. Reading the
+        // dominant layer keeps a single unambiguous value under the cursor.
+        if layers.showsWaterfall {
             guard let waterfallRenderer else { return HoverReadout(hz: hz, db: nil) }
             // Establish an @Observable dependency on the per-hop stream so the
             // tooltip re-renders as data scrolls under a *stationary* cursor
@@ -168,14 +198,14 @@ struct WaterfallZoneView: View {
             _ = pipeline.latestMagnitudes.count
             // Inverse of timeAxisLabels' own topInset/bottomInset mapping,
             // so the tooltip's time position matches the gridlines exactly.
-            let topInset: CGFloat = 12
-            let bottomInset: CGFloat = 28
+            let topInset = plotTopInset
+            let bottomInset = plotBottomInset
             let usableHeight = size.height - topInset - bottomInset
             guard usableHeight > 0 else { return HoverReadout(hz: hz, db: nil) }
             let normalizedPosition = min(max(1 - Double((point.y - topInset) / usableHeight), 0), 1)
             let secondsAgo = normalizedPosition * historyDurationSeconds
             return HoverReadout(hz: hz, db: waterfallRenderer.magnitudeDb(secondsAgo: secondsAgo, hz: hz))
-        case .rta:
+        } else {
             let barsPerOctave = pipeline.bandingResolution.rawValue
             // Reads the same cached per-hop bars RTAView now reads (perf
             // fix) instead of an independent third recomputation of
@@ -250,12 +280,9 @@ struct WaterfallZoneView: View {
                 // a bar top (the Tracked-Frequency level is a single loudest
                 // bin, not the binned per-band bar, so the two legitimately
                 // differ).
-                if displayMode == .rta, usableHeight > 0,
+                if layers.showsRTA, usableHeight > 0,
                    let db = pipeline.trackedFrequencyLevelDb, db.isFinite {
-                    let normalized = (Float(db) - MagnitudeScaling.floorDb)
-                        / (MagnitudeScaling.ceilingDb - MagnitudeScaling.floorDb)
-                    let clamped = min(max(normalized, 0), 1)
-                    let y = topInset + usableHeight * CGFloat(1 - clamped)
+                    let y = dbLevelY(Float(db), usableHeight: usableHeight)
                     Path { path in
                         path.move(to: CGPoint(x: 0, y: y))
                         path.addLine(to: CGPoint(x: proxy.size.width, y: y))
@@ -409,10 +436,14 @@ struct WaterfallZoneView: View {
         .buttonStyle(.plain)
     }
 
+    // Independent on/off toggles (#45), not a mutually-exclusive segment:
+    // each lights when *its* layer is on, and both can be lit at once (that's
+    // the combined overlay). Tapping the only lit one off is a no-op
+    // (GraphLayers.toggling's guard), so the graph never goes blank.
     private func displayModeButton(_ mode: GraphDisplayMode) -> some View {
-        let isSelected = displayMode == mode
+        let isSelected = layers.contains(mode.layer)
         return Button {
-            displayMode = mode
+            layers = layers.toggling(mode.layer)
         } label: {
             // 10pt mono, matching frequencyScaleButton -- the whole cluster
             // speaks the graph's own axis-label type system (ticket #30
@@ -547,6 +578,23 @@ struct WaterfallZoneView: View {
     /// labels from clipping at the view edges (see frequencyAxisLabels).
     private let endpointLabelInset: CGFloat = 18
 
+    /// The plot's vertical insets, single-sourced from GraphPlotMetrics so
+    /// this view's axes/crosshair and RTAView's bars share one mapping (that
+    /// shared mapping is what keeps the RTA from shifting vertically when the
+    /// waterfall layer toggles the RTA between bars and the overlay curve).
+    private let plotTopInset = GraphPlotMetrics.topInset
+    private let plotBottomInset = GraphPlotMetrics.bottomInset
+
+    /// A dB level -> y within the inset plot, using the shared -120…0dB
+    /// MagnitudeScaling range (loud = top). Single source for the dB axis
+    /// gridlines, the overlay curve's baseline mapping, and the crosshair's
+    /// level line, so a curve point, its tick, and the crosshair can't drift.
+    private func dbLevelY(_ db: Float, usableHeight: CGFloat) -> CGFloat {
+        let normalized = (db - MagnitudeScaling.floorDb) / (MagnitudeScaling.ceilingDb - MagnitudeScaling.floorDb)
+        let clamped = min(max(normalized, 0), 1)
+        return plotTopInset + usableHeight * CGFloat(1 - clamped)
+    }
+
     // Inset top/bottom (user report: "first/last value mainly out of
     // screen"): the oldest ("-15s") and newest ("now") gridlines used to map
     // to y=0 and y=proxy.size.height exactly -- flush against the view's
@@ -555,8 +603,8 @@ struct WaterfallZoneView: View {
     // frequency axis's bottom label row instead of overlapping it.
     private var timeAxisLabels: some View {
         GeometryReader { proxy in
-            let topInset: CGFloat = 12
-            let bottomInset: CGFloat = 28
+            let topInset = plotTopInset
+            let bottomInset = plotBottomInset
             let usableHeight = proxy.size.height - topInset - bottomInset
             ForEach(gridlines, id: \.secondsAgo) { gridline in
                 let y = topInset + usableHeight * (1 - gridline.normalizedPosition)
@@ -583,12 +631,11 @@ struct WaterfallZoneView: View {
 
     private var dbAxisLabels: some View {
         GeometryReader { proxy in
-            let topInset: CGFloat = 12
-            let bottomInset: CGFloat = 28
+            let topInset = plotTopInset
+            let bottomInset = plotBottomInset
             let usableHeight = proxy.size.height - topInset - bottomInset
             ForEach(Self.dbGridlineLevels, id: \.self) { db in
-                let normalized = (db - MagnitudeScaling.floorDb) / (MagnitudeScaling.ceilingDb - MagnitudeScaling.floorDb)
-                let y = topInset + usableHeight * (1 - CGFloat(normalized))
+                let y = dbLevelY(db, usableHeight: usableHeight)
                 Rectangle()
                     .fill(theme.text.opacity(0.12))
                     .frame(height: 1)
@@ -599,10 +646,154 @@ struct WaterfallZoneView: View {
         }
     }
 
-    private func axisLabel(_ text: String) -> some View {
+    // The combined-view RTA overlay (#45, treatment B): the live spectrum
+    // drawn as a floating translucent curve over the waterfall, banded
+    // exactly like the standalone RTA -- same pipeline.latestRTABars and the
+    // same RTABarPositionCache band x-positions the bars use, so the overlay
+    // can never disagree with the RTA-only view for the same signal at any
+    // BANDS resolution. Y is the shared -120…0dB MagnitudeScaling range
+    // (loud = top), matched by dbAxisLabelsOverlay on the right; X is the
+    // shared FrequencyAxis log map, so it stays aligned with the frequency
+    // labels. Same top/bottom inset as the axis rows and the peak crosshair,
+    // so curve, dB gridlines and the crosshair's level line all agree.
+    //
+    // Driven off pipeline.latestRTABars -- the exact same source the
+    // standalone RTA bars read -- so the overlay persists, freezes and hides
+    // identically to them. In particular it must NOT gate on hasWaterfallData:
+    // Stop clears hasWaterfallData but leaves latestRTABars (and the waterfall's
+    // own last texture) intact, so gating on it made the curve vanish on Stop
+    // while the waterfall and the standalone RTA both stayed (user report).
+    // Legibility: a halo under-stroke (dark in Dark, light in Light) beneath
+    // the accent stroke keeps the line readable over both bright and dark ramp
+    // regions, plus a faint fill under the curve. Non-interactive.
+    private var rtaOverlayCurve: some View {
+        GeometryReader { proxy in
+            let topInset = plotTopInset
+            let bottomInset = plotBottomInset
+            let usableHeight = proxy.size.height - topInset - bottomInset
+            let bars = pipeline.latestRTABars
+            if !bars.isEmpty, usableHeight > 0 {
+                let positions = RTABarPositionCache.positions(
+                    barsPerOctave: pipeline.bandingResolution.rawValue, config: pipeline.config)
+                let points = overlayCurvePoints(
+                    bars: bars, positions: positions, size: proxy.size,
+                    topInset: topInset, usableHeight: usableHeight)
+                if let first = points.first, let last = points.last {
+                    let baseline = proxy.size.height - bottomInset
+                    Path { p in
+                        p.move(to: CGPoint(x: first.x, y: baseline))
+                        for pt in points { p.addLine(to: pt) }
+                        p.addLine(to: CGPoint(x: last.x, y: baseline))
+                        p.closeSubpath()
+                    }
+                    .fill(theme.accent.opacity(0.14))
+                    overlayCurvePath(points)
+                        .stroke(overlayHaloColor, style: StrokeStyle(lineWidth: 4, lineJoin: .round))
+                    overlayCurvePath(points)
+                        .stroke(theme.accent, style: StrokeStyle(lineWidth: 2, lineJoin: .round))
+                    // Held-peak envelope: parity with the standalone RTA's
+                    // per-bar peak caps (#12), otherwise lost when the RTA
+                    // renders as the overlay curve. A polyline through each
+                    // band's held peak (pipeline.peakForRTABar, the same source
+                    // the bars read), broken across any bands with no peak yet,
+                    // in theme.text over a halo -- matching the bars' peak color
+                    // and clearing PEAK RESET together with them.
+                    let peakPath = overlayPeakPath(
+                        positions: positions, count: points.count,
+                        size: proxy.size, usableHeight: usableHeight)
+                    peakPath.stroke(overlayHaloColor, style: StrokeStyle(lineWidth: 3, lineJoin: .round))
+                    peakPath.stroke(theme.text.opacity(0.9), style: StrokeStyle(lineWidth: 1.5, lineJoin: .round))
+                }
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    private func overlayCurvePoints(
+        bars: [Float], positions: [RTABarPositionCache.BarPosition],
+        size: CGSize, topInset: CGFloat, usableHeight: CGFloat
+    ) -> [CGPoint] {
+        let count = min(bars.count, positions.count)
+        var pts: [CGPoint] = []
+        pts.reserveCapacity(count)
+        for i in 0..<count {
+            let center = (positions[i].start + positions[i].end) / 2
+            let y = topInset + usableHeight * CGFloat(1 - bars[i])
+            pts.append(CGPoint(x: center * size.width, y: y))
+        }
+        return pts
+    }
+
+    private func overlayCurvePath(_ points: [CGPoint]) -> Path {
+        Path { p in
+            guard let first = points.first else { return }
+            p.move(to: first)
+            for pt in points.dropFirst() { p.addLine(to: pt) }
+        }
+    }
+
+    // Held-peak envelope for the overlay curve: connects each band's held
+    // peak, lifting the pen across any band with none recorded yet (same
+    // subpath-breaking approach RTAView.drawNarrowband uses for its peak
+    // line). Reads pipeline.peakForRTABar -- the identical peaks the
+    // standalone bars draw, so both presentations agree and one PEAK RESET
+    // clears them.
+    private func overlayPeakPath(
+        positions: [RTABarPositionCache.BarPosition], count: Int,
+        size: CGSize, usableHeight: CGFloat
+    ) -> Path {
+        var path = Path()
+        var penDown = false
+        for i in 0..<count {
+            guard let peak = pipeline.peakForRTABar(i) else { penDown = false; continue }
+            let center = (positions[i].start + positions[i].end) / 2
+            let point = CGPoint(x: center * size.width,
+                                y: plotTopInset + usableHeight * CGFloat(1 - peak))
+            if penDown {
+                path.addLine(to: point)
+            } else {
+                path.move(to: point)
+                penDown = true
+            }
+        }
+        return path
+    }
+
+    private var overlayHaloColor: Color {
+        theme.mode == .light ? Color.white.opacity(0.7) : Color.black.opacity(0.6)
+    }
+
+    // Combined-view dB axis (#45): the RTA's level scale on the *right* edge,
+    // accent-tinted, so the dual-Y is unmistakable -- seconds on the left
+    // (timeAxisLabels), dB on the right. Short right-edge ticks rather than
+    // full-width gridlines, to avoid clashing with the time axis's own
+    // full-width lines over the shared plot. Same levels/mapping as the
+    // standalone dbAxisLabels, so a curve point on the "-20 dB" tick is -20dB.
+    private var dbAxisLabelsOverlay: some View {
+        GeometryReader { proxy in
+            let topInset = plotTopInset
+            let bottomInset = plotBottomInset
+            let usableHeight = proxy.size.height - topInset - bottomInset
+            ForEach(Self.dbGridlineLevels, id: \.self) { db in
+                let y = dbLevelY(db, usableHeight: usableHeight)
+                Rectangle()
+                    .fill(theme.accent.opacity(0.5))
+                    .frame(width: 14, height: 1)
+                    .position(x: proxy.size.width - 7, y: y)
+                axisLabel("\(Int(db)) dB", color: theme.accent)
+                    .position(x: proxy.size.width - 38, y: y)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+
+    // `color` nil = the default dimmed label; the #45 overlay dB axis passes
+    // theme.accent so its right-edge ticks read as the RTA's own axis,
+    // distinct from the waterfall's left-edge time labels.
+    private func axisLabel(_ text: String, color: Color? = nil) -> some View {
         Text(text)
             .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
-            .foregroundStyle(theme.text.opacity(0.9))
+            .foregroundStyle(color ?? theme.text.opacity(0.9))
             .padding(.horizontal, 4)
             .padding(.vertical, 1)
             .background(

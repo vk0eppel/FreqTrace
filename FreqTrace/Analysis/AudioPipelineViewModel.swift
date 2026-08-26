@@ -227,9 +227,19 @@ final class AudioPipelineViewModel {
     /// displayMode); Appearance is the deliberate persisted exception.
     var frequencyScale: FrequencyScale = .octave
 
+    /// Global A/C/Z weighting. Changing it clears every held peak (RTA bars
+    /// *and* SPL, unlike bandingResolution which clears only the RTA bars):
+    /// a held peak is a dBFS level captured under the previous weighting, and
+    /// A/C/Z shift that basis by up to ~20dB in the lows, so an old peak is
+    /// stale against the newly-weighted live values -- the peak envelope
+    /// visibly stopped tracking the live curve otherwise (user report). Same
+    /// rationale as bandingResolution clearing its peaks; the bars themselves
+    /// re-weight on the pipeline's next hop (setWeighting is async), so only
+    /// the peaks need clearing here.
     var weighting: Weighting = .default {
         didSet {
             guard weighting != oldValue else { return }
+            peakTracker.reset()
             let pipeline = pipeline
             Task { await pipeline.setWeighting(weighting) }
         }
