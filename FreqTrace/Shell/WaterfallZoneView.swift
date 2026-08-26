@@ -334,6 +334,11 @@ struct WaterfallZoneView: View {
             Text("BANDS")
                 .font(.system(size: Typography.axisLabelSize, weight: .semibold, design: .monospaced))
                 .foregroundStyle(theme.textDim)
+                // Match the 6pt horizontal padding the toggle segments give
+                // their glyphs, so the "BANDS" caption's left edge lines up
+                // with WATERFALL/OCTAVE rather than hanging 6pt further left
+                // (the caption has no pill padding of its own; user report).
+                .padding(.leading, 6)
             Menu {
                 ForEach(RTABandingResolution.allCases) { resolution in
                     Button {
@@ -396,6 +401,10 @@ struct WaterfallZoneView: View {
                     RoundedRectangle(cornerRadius: 4)
                         .fill(isSelected ? theme.accent : Color.clear)
                 )
+                // An unselected segment's background is Color.clear, so the
+                // padding around the glyph doesn't hit-test -- make the whole
+                // padded rect tappable (see ControlsRowView's LED buttons).
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
