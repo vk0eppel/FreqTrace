@@ -11,7 +11,7 @@ A real-time audio analysis tool for live sound environments. Visualize sounds, t
 
 ## Requirements
 
-- macOS (primary platform; iOS support may come later)
+- macOS 15 (Sequoia) or later (primary platform; iOS support may come later)
 - Xcode 16+
 
 ## License
