@@ -12,6 +12,7 @@ Primary platform is **macOS**; iOS support may come later. The Xcode project is 
 - **Accelerate (vDSP)** — FFT and DSP math for the spectrograph and frequency tracker
 - Targets: `FreqTrace` (app), `FreqTraceTests` (unit), `FreqTraceUITests` (UI)
 - Scheme: `FreqTrace`
+- **Minimum OS: macOS 15.0 / iOS 18.0 / visionOS 2.0** — not arbitrary: the binding constraint is `AudioRingBuffer`'s use of the standard-library `Atomic` (Swift Synchronization), which is `macOS 15+`. It was previously set to a needlessly high 26.4 with no code requiring it; lowered to the real floor and build-verified. There are no `@available`/`#available` gates in the source, so this floor is set entirely by the atomics — re-check by building at a lower target if the ring buffer's atomics are ever replaced with older primitives (`os_unfair_lock`/`stdatomic`).
 
 ## Build & test
 
