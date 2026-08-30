@@ -829,9 +829,15 @@ final class AudioPipelineViewModel {
     /// Single-fire continuation guard for `firstResult`: the operation task
     /// and the timeout task both race to fulfill one continuation; only the
     /// first wins. MainActor-isolated so the `done` check is race-free.
-    @MainActor private final class SingleResume<V: Sendable> {
+    // Non-generic on purpose: it stores only the `done` flag, never a value of
+    // the continuation's type, so the generic belongs on `fulfill`, not the
+    // class. A generic class here also tripped a Swift 6.3.3 optimizer crash
+    // (EarlyPerfInliner recursing on the synthesized deinit's generic layout
+    // constraints) under Release optimization once the deployment target was
+    // lowered to macOS 15 — see git history.
+    @MainActor private final class SingleResume {
         private var done = false
-        func fulfill(_ continuation: CheckedContinuation<V, Never>, with value: V) {
+        func fulfill<V: Sendable>(_ continuation: CheckedContinuation<V, Never>, with value: V) {
             guard !done else { return }
             done = true
             continuation.resume(returning: value)
@@ -849,7 +855,7 @@ final class AudioPipelineViewModel {
         of operation: @escaping @Sendable () async -> T
     ) async -> T? {
         let opTask = Task { await operation() }
-        let resume = SingleResume<T?>()
+        let resume = SingleResume()
         return await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
             Task { @MainActor in
                 let value = await opTask.value
