@@ -25,14 +25,23 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 APP="$ROOT/build/release/Build/Products/Release/FreqTrace.app"
 ZIP="$ROOT/build/dist/FreqTrace-$TAG-macos.zip"
 
-echo "==> Building signed Release for $TAG"
+echo "==> Building signed universal Release for $TAG"
 rm -rf "$ROOT/build/release"
 xcodebuild -project "$ROOT/FreqTrace.xcodeproj" -scheme FreqTrace \
   -configuration Release -destination 'platform=macOS' \
+  ARCHS="arm64 x86_64" ONLY_ACTIVE_ARCH=NO \
   -derivedDataPath "$ROOT/build/release" build
 
 echo "==> Verifying signature"
 codesign --verify --strict --verbose=2 "$APP"
+
+echo "==> Verifying universal binary (arm64 + x86_64)"
+ARCHS_BUILT="$(lipo -archs "$APP/Contents/MacOS/FreqTrace")"
+case " $ARCHS_BUILT " in
+  *" arm64 "*) case " $ARCHS_BUILT " in *" x86_64 "*) : ;; *) UNIVERSAL_FAIL=1 ;; esac ;;
+  *) UNIVERSAL_FAIL=1 ;;
+esac
+[ -z "${UNIVERSAL_FAIL:-}" ] || { echo "ERROR: app is not universal (got: $ARCHS_BUILT)" >&2; exit 1; }
 
 echo "==> Zipping (ditto, preserves the signature) -> $ZIP"
 mkdir -p "$ROOT/build/dist"; rm -f "$ZIP"
