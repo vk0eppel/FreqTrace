@@ -36,6 +36,16 @@ A real-time audio analysis tool for live sound environments. Visualize sounds, t
 3. The big **Tracked Frequency** readout shows the loudest frequency in real time; flagged **Anomaly Candidates** highlight narrowband tones that are ringing up (feedback / resonance).
 4. **Freeze** pauses the display for a closer look (capture keeps running); **Stop** halts capture entirely.
 
+## Analysis details
+
+For the curious, the numbers behind the readouts:
+
+- **FFT window function: Hann** (normalized). It's the standard choice for audio spectrographs and RTAs — the same window Smaart uses — balancing frequency resolution against spectral leakage so a loud tone doesn't smear across the display.
+- **FFT size: selectable** (FFT Size control), default **8192 samples**. Larger sizes give finer frequency resolution at the cost of time resolution.
+- **Sample rate: follows your hardware** (nominally 48 kHz). At 8192 / 48 kHz that's a raw bin spacing of ~5.9 Hz; the Tracked Frequency readout refines below that with sub-bin (parabolic) interpolation.
+- **Overlap:** consecutive analyses overlap ≥50% (up to 87.5% at the largest window), so the waterfall and RTA update smoothly regardless of FFT size.
+- **Weighting:** A / C / Z, applied to the Tracked Frequency, SPL, and the waterfall/RTA display. The feedback/resonance detector deliberately reads the raw, unweighted spectrum so a low-frequency ring isn't hidden by A-weighting's roll-off.
+
 ## Build from source
 
 Requires **Xcode 16 or later**.
