@@ -50,9 +50,13 @@ final class AudioPipelineViewModel {
     /// overlay depends on a value that only flips on the empty<->data
     /// transition rather than on the array that changes every hop.
     private(set) var hasWaterfallData = false
-    /// Raw (pre-offset) weighted level in dB from the most recent hop. See
+    /// Raw (pre-offset) A- and C-weighted overall levels in dB from the most
+    /// recent hop -- the two independent SPL meters (CONTEXT.md "SPL"). Unlike
+    /// Tracked Frequency / RTA / waterfall, SPL does NOT follow the global
+    /// `weighting`; both weightings are always computed. See
     /// FrequencyTracker.weightedLevelDb(fromMagnitudes:weighting:).
-    private(set) var splDb: Double?
+    private(set) var splDbA: Double?
+    private(set) var splDbC: Double?
     /// The level (dB) of the tracked-frequency bin itself (ticket #12,
     /// CONTEXT.md "Peak" -- "Tracked Frequency level"). See
     /// FrequencyTracker.trackedFrequencyLevelDb(fromMagnitudes:weighting:).
@@ -169,18 +173,20 @@ final class AudioPipelineViewModel {
         }
     }
 
-    /// Peak (ticket #12, CONTEXT.md "Peak"): one tracker shared by SPL, the
-    /// Tracked Frequency level, and each RTA bar (keyed by bar index) so a
-    /// single manual reset clears all of them together, per the AC. Never
-    /// applies to the waterfall -- nothing here is read by WaterfallZoneView's
-    /// waterfall branch.
+    /// Peak (ticket #12, CONTEXT.md "Peak"): one tracker shared by both SPL
+    /// meters, the Tracked Frequency level, and each RTA bar (keyed by bar
+    /// index) so a single manual reset clears all of them together, per the
+    /// AC. Never applies to the waterfall -- nothing here is read by
+    /// WaterfallZoneView's waterfall branch.
     enum PeakKey: Hashable {
-        case spl
+        case splA
+        case splC
         case rtaBar(Int)
     }
     private var peakTracker = PeakHoldTracker<PeakKey>()
 
-    var splPeakDb: Float? { peakTracker.peak(for: .spl) }
+    var splPeakDbA: Float? { peakTracker.peak(for: .splA) }
+    var splPeakDbC: Float? { peakTracker.peak(for: .splC) }
     func peakForRTABar(_ index: Int) -> Float? { peakTracker.peak(for: .rtaBar(index)) }
 
     /// The manual reset (AC: "A manual reset control clears all held
@@ -945,7 +951,7 @@ final class AudioPipelineViewModel {
         // A delivered hop means capture is live -- no longer "starting."
         isCaptureStarting = false
 
-        if result.splDb <= Self.digitalSilenceThresholdDb {
+        if result.splDbA <= Self.digitalSilenceThresholdDb {
             consecutiveSilentHops += 1
             // == not >=: query TCC once per silence episode, not per hop.
             if consecutiveSilentHops == Self.silentHopsBeforePermissionCheck,
@@ -974,12 +980,16 @@ final class AudioPipelineViewModel {
             let stepped = RTABinning.steppedMagnitudes(magnitudes: result.magnitudes, config: config, barsPerOctave: bandingResolution.rawValue)
             waterfallSink(stepped, result.fullScalePower)
         }
-        splDb = result.splDb
+        splDbA = result.splDbA
+        splDbC = result.splDbC
         trackedFrequencyLevelDb = result.trackedFrequencyLevelDb
         anomalyCandidates = result.anomalyCandidates
         fullScalePower = result.fullScalePower
-        if result.splDb.isFinite {
-            peakTracker.update(Float(result.splDb), for: .spl)
+        if result.splDbA.isFinite {
+            peakTracker.update(Float(result.splDbA), for: .splA)
+        }
+        if result.splDbC.isFinite {
+            peakTracker.update(Float(result.splDbC), for: .splC)
         }
         // Computed here (every hop, regardless of whether RTA is the
         // currently-visible view) rather than from RTAView's onChange, so
@@ -1047,7 +1057,8 @@ final class AudioPipelineViewModel {
         trackedFrequencyHz = nil
         latestMagnitudes = []
         hasWaterfallData = false
-        splDb = nil
+        splDbA = nil
+        splDbC = nil
         trackedFrequencyLevelDb = nil
         anomalyCandidates = []
     }
@@ -1060,10 +1071,15 @@ final class AudioPipelineViewModel {
         .frequency(hz: trackedFrequencyHz)
     }
 
-    /// SPL readout (raw dBFS + manual offset, ticket #6), same number/unit
-    /// split and empty-state placeholder as the Tracked Frequency hero.
-    var splReading: MeasuredReading {
-        .spl(db: splDb, offset: splOffsetDb)
+    /// The two SPL readouts (raw dBFS + the shared manual offset, ticket #6),
+    /// same number/unit split and empty-state placeholder as the Tracked
+    /// Frequency hero. A-weighted and C-weighted are shown as two independent
+    /// meters (CONTEXT.md "SPL"); the single `splOffsetDb` applies to both.
+    var splReadingA: MeasuredReading {
+        .spl(db: splDbA, offset: splOffsetDb, unit: "dB(A)")
+    }
+    var splReadingC: MeasuredReading {
+        .spl(db: splDbC, offset: splOffsetDb, unit: "dB(C)")
     }
 
     /// What the Input Device plate should display (ticket #23): the running
@@ -1080,12 +1096,16 @@ final class AudioPipelineViewModel {
         )
     }
 
-    /// "PEAK -12dB"-style secondary readout (ticket #12, CONTEXT.md
-    /// "Peak"), or nil before any peak has been recorded (no placeholder --
-    /// this is an optional overlay, not a hero value).
-    var formattedSPLPeak: String? {
-        guard let splPeakDb, splPeakDb.isFinite else { return nil }
-        return "PEAK \(Int((splPeakDb + Float(splOffsetDb)).rounded())) dB"
+    /// "PEAK -12dB"-style secondary readouts (ticket #12, CONTEXT.md "Peak"),
+    /// one per SPL meter, or nil before that meter's peak has been recorded (no
+    /// placeholder -- an optional overlay, not a hero value). Both fold in the
+    /// shared `splOffsetDb`, matching their live readings.
+    var formattedSPLPeakA: String? { formattedSPLPeak(splPeakDbA, unit: "dB(A)") }
+    var formattedSPLPeakC: String? { formattedSPLPeak(splPeakDbC, unit: "dB(C)") }
+
+    private func formattedSPLPeak(_ peak: Float?, unit: String) -> String? {
+        guard let peak, peak.isFinite else { return nil }
+        return "PEAK \(Int((peak + Float(splOffsetDb)).rounded())) \(unit)"
     }
 
     /// Live level of the currently-tracked bin (updates every hop, same as

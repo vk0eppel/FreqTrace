@@ -41,10 +41,13 @@ nonisolated struct MeasuredReading: Equatable {
     }
 
     /// SPL = raw dBFS + manual offset (ticket #6), rounded to a whole dB.
-    static func spl(db: Double?, offset: Double) -> MeasuredReading {
+    /// `unit` lets the two SPL meters label their weighting on the number
+    /// itself -- "dB(A)" / "dB(C)" -- so the reading is self-identifying at a
+    /// distance, not only via the panel caption (defaults to plain "dB").
+    static func spl(db: Double?, offset: Double, unit: String = "dB") -> MeasuredReading {
         guard let db, db.isFinite else {
-            return MeasuredReading(number: placeholderNumber, unit: "dB", hasValue: false)
+            return MeasuredReading(number: placeholderNumber, unit: unit, hasValue: false)
         }
-        return MeasuredReading(number: "\(Int((db + offset).rounded()))", unit: "dB", hasValue: true)
+        return MeasuredReading(number: "\(Int((db + offset).rounded()))", unit: unit, hasValue: true)
     }
 }

@@ -4,11 +4,14 @@
 //
 //  The Measured Data row: Tracked Frequency (hero, live-wired to
 //  AudioPipelineViewModel per ticket #3), Anomaly Candidates (live per
-//  ticket #5), SPL (live per ticket #6, moved here from the Controls row
-//  so the SPL Offset control sits with the reading it affects). Peak
-//  markers (ticket #12, CONTEXT.md "Peak") show alongside Tracked
-//  Frequency's and SPL's live values -- never appearing at all until a
-//  peak has actually been recorded, no placeholder dash.
+//  ticket #5), and two SPL meters -- SPL (A) and SPL (C) (live per ticket
+//  #6; both weightings shown at once, neither following the global
+//  Weighting -- CONTEXT.md "SPL"). A single shared SPL Offset strip spans
+//  beneath both SPL panels (one offset for both meters), moved here from the
+//  Controls row so it's with the readings it affects. Peak markers (ticket #12,
+//  CONTEXT.md "Peak") show alongside each SPL meter's live value -- never
+//  appearing at all until a peak has actually been recorded, no placeholder
+//  dash.
 //
 //  Anomaly Candidates (CONTEXT.md, "Measured Data row"): top 2-3 ranked by
 //  severity, shows nothing at all (not even a dash) when there are zero --
@@ -90,35 +93,82 @@ struct MeasuredDataRowView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            dataBlock(label: "SPL") {
-                VStack(alignment: .leading, spacing: 4) {
-                    readingValue(
-                        trackedFrequencyViewModel.splReading,
-                        numberSize: Typography.secondarySize,
-                        referenceNumber: "-100"
-                    )
-                    fixedHeight(reference: peakLabelReference) {
-                        if let peak = trackedFrequencyViewModel.formattedSPLPeak {
-                            peakLabel(peak)
-                        }
-                    }
-                    splOffsetControl
-                }
-            }
+            // Two independent SPL meters, A- and C-weighted, shown side by
+            // side (CONTEXT.md "SPL") -- neither follows the global Weighting.
+            splGroup
         }
         .padding(.horizontal, 20)
         .padding(.vertical, 14)
         .background(theme.surface)
     }
 
-    // The SPL Offset control (CONTEXT.md "SPL Offset"): a bare-bones manual
-    // numeric field, no calibration workflow -- ADR 0003. Lives with the SPL
-    // reading it offsets, rather than in the Controls row, since it's
-    // scoped to this one readout. Displayed = raw dBFS + this offset (see
-    // AudioPipelineViewModel.formattedSPL).
-    private var splOffsetControl: some View {
-        HStack(spacing: 6) {
-            Text("OFFSET")
+    // The two SPL meters as one group: the A and C panels side by side, with
+    // a single slim OFFSET strip spanning beneath both (the offset is shared,
+    // so it belongs to neither panel alone -- user request). The group sits
+    // in the outer top-aligned row like any other block; the strip makes it a
+    // little taller than the others, which only trims the flexible waterfall
+    // above by a few pt (the data row sizes to content).
+    private var splGroup: some View {
+        VStack(spacing: 8) {
+            HStack(alignment: .top, spacing: 12) {
+                splBlock(
+                    label: "SPL (A)",
+                    reading: trackedFrequencyViewModel.splReadingA,
+                    peak: trackedFrequencyViewModel.formattedSPLPeakA
+                )
+                splBlock(
+                    label: "SPL (C)",
+                    reading: trackedFrequencyViewModel.splReadingC,
+                    peak: trackedFrequencyViewModel.formattedSPLPeakC
+                )
+            }
+            // The two panels flex to fill whatever height is left above the
+            // strip, so the whole group is exactly one block tall (matching
+            // Tracked Frequency) rather than a block + an extra strip line
+            // below it (user report: the group was taller than Tracked
+            // Frequency / the offset sat alone on a new line). The SPL panels
+            // had ~44pt of unused vertical space at the full block height
+            // anyway, so absorbing the strip here costs the meters nothing.
+            splOffsetStrip
+        }
+        .frame(height: Self.dataBlockOuterHeight)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    // One SPL meter block: the weighted reading (hero) and its held PEAK.
+    // Unlike the fixed-112pt dataBlock, this fills the height its container
+    // gives it (maxHeight: .infinity) so splGroup can split one block's worth
+    // of height between the two panels and the shared offset strip. Same
+    // caption + recessed meterPanel treatment as the other blocks otherwise.
+    private func splBlock(label: String, reading: MeasuredReading, peak: String?) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(label)
+                .font(.system(size: Typography.captionSize, weight: .semibold))
+                .tracking(0.8)
+                .foregroundStyle(theme.textFaint)
+            readingValue(reading, numberSize: Typography.secondarySize, referenceNumber: "-100")
+            fixedHeight(reference: peakLabelReference) {
+                if let peak {
+                    peakLabel(peak)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 12)
+        .meterPanel()
+    }
+
+    // The shared SPL Offset strip (CONTEXT.md "SPL Offset"): a bare-bones
+    // manual numeric field, no calibration workflow -- ADR 0003. One offset
+    // applies to both meters (a physical calibration is one system gain), so
+    // it spans under both panels rather than sitting inside one of them.
+    // Recessed to match the meter panels above it, and full-width across the
+    // pair so it reads as belonging to the SPL meters as a whole. Displayed
+    // level = raw dBFS + this offset (see AudioPipelineViewModel.splReadingA/C).
+    private var splOffsetStrip: some View {
+        HStack(spacing: 8) {
+            Text("SPL OFFSET")
                 .font(.system(size: Typography.subCaptionSize, weight: .regular))
                 .foregroundStyle(theme.textFaint)
             NumericValueField(
@@ -129,6 +179,10 @@ struct MeasuredDataRowView: View {
                 range: AudioPipelineViewModel.splOffsetRangeDb
             )
         }
+        .padding(.horizontal, 20)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .center)
+        .meterPanel()
     }
 
     // Compound severity signal (rank 0 = highest): text size, color
@@ -177,11 +231,14 @@ struct MeasuredDataRowView: View {
             .foregroundStyle(theme.textDim)
     }
 
-    /// Height reference for the optional Peak label line (shared by
-    /// Tracked Frequency and SPL) -- any non-empty string at the same font
-    /// reserves the correct line height; the exact text never renders.
+    /// Width+height reference for the optional Peak label line (both SPL
+    /// meters) -- rendered hidden to reserve layout size; the exact text never
+    /// shows. Must be at least as wide as the widest real peak string so the
+    /// value isn't clipped: the weighted unit "dB(A)"/"dB(C)" makes
+    /// "PEAK -100 dB(A)" the widest case (a bare "PEAK -100 dB" reference
+    /// truncated the live "PEAK -8 dB(A)" to "PEAK -8 dB(…" -- user report).
     private var peakLabelReference: some View {
-        Text("PEAK -100 dB")
+        Text("PEAK -100 dB(A)")
             .font(.system(size: Typography.subCaptionSize, weight: .medium, design: .monospaced))
     }
 
@@ -223,6 +280,11 @@ struct MeasuredDataRowView: View {
     // + the 64pt hero digits + the Peak line), so all three meter panels
     // match regardless of how much a given block's value actually needs.
     private static let dataBlockContentHeight: CGFloat = 112
+    /// The full outer height of a Measured Data block: content + the 12pt
+    /// vertical padding on each side dataBlock applies before meterPanel.
+    /// splGroup pins itself to this so the two SPL panels + shared offset
+    /// strip together are exactly one block tall, not taller.
+    private static let dataBlockOuterHeight: CGFloat = dataBlockContentHeight + 24
 
     @ViewBuilder
     private func dataBlock(label: String, @ViewBuilder value: () -> some View) -> some View {

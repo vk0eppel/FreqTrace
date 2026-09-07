@@ -74,6 +74,10 @@ struct SignalGeneratorControlView: View {
                 Text(waveform.displayName.uppercased())
                     .font(.system(size: Typography.controlSize, weight: .semibold))
                     .foregroundStyle(isSelected ? theme.text : theme.textDim)
+                    // Never break a short label mid-word ("WHIT/E") when the
+                    // row is tight -- keep each on one line at its full width
+                    // (user report).
+                    .fixedSize(horizontal: true, vertical: false)
             }
         }
         .buttonStyle(.plain)

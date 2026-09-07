@@ -22,11 +22,16 @@ nonisolated struct AnalysisResult: Sendable {
     /// spectrum(in:)'s raw output directly inside the pipeline, since ADR
     /// 0001 requires it to catch a resonance regardless of weighting.
     let magnitudes: [Float]
-    /// Weighted overall level in dB, self-calibrated so full-scale reads
-    /// ~0dB -- the SPL meter's raw (pre-offset) reading (ticket #6,
-    /// CONTEXT.md "SPL Offset"). Uses the same shared Weighting as
-    /// trackedFrequencyHz.
-    let splDb: Double
+    /// Weighted overall levels in dB, self-calibrated so full-scale reads
+    /// ~0dB -- the two SPL meters' raw (pre-offset) readings (ticket #6,
+    /// CONTEXT.md "SPL Offset"). Unlike Tracked Frequency / RTA / waterfall,
+    /// SPL does NOT follow the global Weighting: both an A-weighted (LAeq-
+    /// style) and a C-weighted (LCeq-style) level are computed every hop and
+    /// shown side by side, matching a real sound-level meter (the C-minus-A
+    /// difference is FOH's low-frequency-content cue). The global Weighting
+    /// control drives only trackedFrequencyHz and the display spectrum.
+    let splDbA: Double
+    let splDbC: Double
     /// The level (dB) of the tracked-frequency bin itself (ticket #12,
     /// CONTEXT.md "Peak" -- "Tracked Frequency level") -- distinct from
     /// splDb, which sums across the whole weighted spectrum.
@@ -167,7 +172,12 @@ actor AudioAnalysisPipeline {
                     // correct energy-average, exactly how a real Fast/Slow SPL
                     // meter integrates -- so Fast/Slow now govern how quickly
                     // the SPL readout settles, like Tracked Frequency.
-                    let splDb = tracker.weightedLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting)
+                    // Both weightings are computed unconditionally (not the
+                    // global `weighting`): the two SPL meters are fixed A and C
+                    // (see AnalysisResult.splDbA/splDbC). Two extra sums over
+                    // the bins per hop -- negligible.
+                    let splDbA = tracker.weightedLevelDb(fromMagnitudes: blendedForTracking, weighting: .a)
+                    let splDbC = tracker.weightedLevelDb(fromMagnitudes: blendedForTracking, weighting: .c)
                     let levelDb = tracker.trackedFrequencyLevelDb(fromMagnitudes: blendedForTracking, weighting: weighting) ?? -Double.infinity
                     // Raw, unblended, unweighted magnitudes -- ADR 0001
                     // requires the true measured spectrum so a genuine
@@ -183,7 +193,8 @@ actor AudioAnalysisPipeline {
                     // either view).
                     let displaySpectrum = tracker.weightedSpectrum(fromMagnitudes: blendedForTracking, weighting: weighting)
                     continuation.yield(AnalysisResult(
-                        trackedFrequencyHz: frequency, magnitudes: displaySpectrum, splDb: splDb,
+                        trackedFrequencyHz: frequency, magnitudes: displaySpectrum,
+                        splDbA: splDbA, splDbC: splDbC,
                         trackedFrequencyLevelDb: levelDb, anomalyCandidates: anomalyCandidates,
                         fullScalePower: tracker.fullScalePower, timestamp: Date()
                     ))

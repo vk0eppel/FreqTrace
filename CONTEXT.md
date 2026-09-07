@@ -9,11 +9,15 @@ The single frequency currently carrying the most energy, per the active Weightin
 _Avoid_: Dominant frequency, peak frequency
 
 **Weighting**:
-A single global setting (A/C/Z, user-selectable, defaults to A) applied wherever the app judges "loudest" or measures level — the Tracked Frequency, the SPL meter, and the waterfall/RTA spectrum display. One setting shared across features, not configured per-feature. Explicitly NOT applied to the Anomaly Candidate detector's own analysis (ADR 0001) — a genuine low-frequency resonance must not be hidden by A-weighting's roll-off just because it wouldn't read loud to a human ear.
+A single global setting (A/C/Z, user-selectable, defaults to A) applied where the app judges "loudest" — the Tracked Frequency and the waterfall/RTA spectrum display. One setting shared across those features, not configured per-feature. Explicitly NOT applied to the Anomaly Candidate detector's own analysis (ADR 0001) — a genuine low-frequency resonance must not be hidden by A-weighting's roll-off just because it wouldn't read loud to a human ear. Also NOT applied to the SPL meters, which are fixed A and C (see **SPL**).
 _Avoid_: Weighting curve (fine as a description, but the app concept is the single shared setting)
 
+**SPL**:
+Two independent overall-level meters shown side by side — **SPL (A)** (A-weighted, LAeq-style) and **SPL (C)** (C-weighted, LCeq-style) — each summing weighted power across the whole spectrum (not a single peak). Both are always shown and do NOT follow the global Weighting; a real sound-level meter reports LA and LC at once, and the C-minus-A difference is FOH's cue for how much low-frequency energy is in the mix. Each meter holds its own Peak; the shared **SPL Offset** applies to both.
+_Avoid_: "the SPL meter" (there are two — name the weighting: SPL (A) / SPL (C))
+
 **SPL Offset**:
-A manually-entered number (default 0) added to the raw dBFS level to produce the SPL meter's displayed value. Placeholder for future device mic calibration data — v1 has no real calibration, so the meter is honestly relative/uncalibrated until this is populated with accurate data.
+A single manually-entered number (default 0) added to the raw dBFS level to produce both SPL meters' displayed values. Placeholder for future device mic calibration data — v1 has no real calibration, so the meters are honestly relative/uncalibrated until this is populated with accurate data. One shared offset (a physical calibration is one system gain, not per-weighting).
 _Avoid_: Calibration (implies an accuracy v1 doesn't have yet)
 
 **Anomaly Candidate**:
@@ -24,7 +28,7 @@ _Avoid_: Feedback candidate, ringing candidate, resonance candidate (each implie
 Two frequency components are harmonically related if one sits at an integer multiple of the other (e.g. ~2x, ~3x). An Anomaly Candidate must be harmonically *isolated* — but only a **strong** harmonic (within a Sabine isolation margin, ~10dB) excludes it, not merely any harmonic present. A full harmonic series marks a peak as musical content; a lone tone that happens to coincide with a *weak* program harmonic is still flaggable (the binary "any harmonic present → exclude" gate wrongly suppressed real feedback — #38 / HCMS finding).
 
 **Peak**:
-A passive marker showing the highest level seen since the last manual reset, displayed while the live view keeps updating underneath/around it — classic level-meter behavior (indefinite hold, not a rolling/auto-expiring window). Applies only to the RTA bars and the SPL readout — never appears on the waterfall, since that's already a time-history display and a "held peak" adds nothing there. **Not** on the Tracked Frequency level (reconsidered/removed after initial implementation): that readout is deliberately instantaneous, and its frequency wanders (it's whichever bin is loudest *right now*), so a held peak of its level isn't anchored to any single frequency — an unanchored, weaker duplicate of the frequency-anchored RTA bar peak. Distinct from Freeze — Peak never stops the live display, it just adds a marker on top of it.
+A passive marker showing the highest level seen since the last manual reset, displayed while the live view keeps updating underneath/around it — classic level-meter behavior (indefinite hold, not a rolling/auto-expiring window). Applies only to the RTA bars and the two SPL meters (each SPL meter holds its own peak) — never appears on the waterfall, since that's already a time-history display and a "held peak" adds nothing there. **Not** on the Tracked Frequency level (reconsidered/removed after initial implementation): that readout is deliberately instantaneous, and its frequency wanders (it's whichever bin is loudest *right now*), so a held peak of its level isn't anchored to any single frequency — an unanchored, weaker duplicate of the frequency-anchored RTA bar peak. Distinct from Freeze — Peak never stops the live display, it just adds a marker on top of it.
 _Avoid_: Peak Hold, Max-hold (implies the display itself is held, and "Hold" is already used by Freeze/Stop's pause semantics — reusing it here caused confusion); Peak Track (collides with Tracked Frequency, an unrelated concept)
 
 **Freeze**:
@@ -59,7 +63,7 @@ A frequency-domain averaging across neighboring FFT bins at a single instant (e.
 _Avoid_: Smoothing (ambiguous with Time Averaging — always specify which)
 
 **Measured Data row**:
-The screen region directly below the Waterfall/RTA view showing large, glanceable current values: Tracked Frequency, Anomaly Candidate indicator, and SPL. Read-only — no controls live here.
+The screen region directly below the Waterfall/RTA view showing large, glanceable current values: Tracked Frequency, Anomaly Candidate indicator, SPL (A), and SPL (C) — four panels. Read-only, except the shared SPL Offset field in a slim strip spanning under both SPL panels.
 
 **Controls row**:
 The screen region below the Measured Data row holding all adjustable settings, arranged as two fixed lines (not a wrapping flat list): Line 1 is Analysis settings (Weighting, Time Averaging), View controls (Peak, Freeze, Stop), and Signal Generator (waveform type, on/off, level — right-aligned, Output Device excluded). Line 2 is Input Device (left), Appearance Mode (center), Output Device (right). Deliberately separated from the Measured Data row so measured values are never adjacent to controls that change them. The Waterfall/RTA layer toggles are not here — they live in the top-right corner of the Waterfall/RTA zone itself, since they're about that view specifically. The waterfall and RTA are independent on/off layers (#45), shown either alone or both at once (the combined overlay), not a mutually-exclusive pick.
