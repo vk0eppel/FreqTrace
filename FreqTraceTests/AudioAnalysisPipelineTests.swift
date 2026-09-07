@@ -57,6 +57,42 @@ struct AudioAnalysisPipelineTests {
         #expect(received >= 5, "pipeline delivered no hops within the timeout")
     }
 
+    /// The input clip/headroom meter's source (AnalysisResult.inputPeakDbFS):
+    /// the true time-domain sample peak, 0 dBFS = full scale. A full-scale
+    /// (amplitude 1.0) tone reads ~0 dBFS; a half-scale (0.5) tone reads ~-6
+    /// dBFS -- a raw sample peak, independent of the FFT/weighting the SPL
+    /// levels use.
+    @Test func reportsInputSamplePeakDbFS() async throws {
+        func firstInputPeakDbFS(amplitude: Float) async -> Double? {
+            let config = AnalysisConfig.default
+            let ringBuffer = AudioRingBuffer(capacity: Int(config.sampleRate) * 2)
+            let samples = FrequencyTracker.sineWave(frequency: 1000, amplitude: amplitude, sampleRate: config.sampleRate, count: Int(config.sampleRate))
+            samples.withUnsafeBufferPointer { ringBuffer.write($0.baseAddress!, count: $0.count) }
+            let pipeline = AudioAnalysisPipeline(config: config, ringBuffer: ringBuffer, weighting: .z)
+            let stream = await pipeline.start()
+            let value = await withTaskGroup(of: Double?.self) { group in
+                group.addTask {
+                    for await result in stream { return result.inputPeakDbFS }
+                    return nil
+                }
+                group.addTask {
+                    try? await Task.sleep(nanoseconds: 5_000_000_000)
+                    return nil
+                }
+                let winner = await group.next() ?? nil
+                group.cancelAll()
+                return winner
+            }
+            await pipeline.stop()
+            return value
+        }
+
+        let fullScale = try #require(await firstInputPeakDbFS(amplitude: 1.0))
+        #expect(abs(fullScale - 0) <= 0.5, "full-scale tone should read ~0 dBFS, got \(fullScale)")
+        let halfScale = try #require(await firstInputPeakDbFS(amplitude: 0.5))
+        #expect(abs(halfScale - (-6.02)) <= 0.5, "half-scale tone should read ~-6 dBFS, got \(halfScale)")
+    }
+
     /// Same harness at every selectable FFT size -- the hop cap means the
     /// window/hop relationship now differs per size (50% overlap below
     /// 4096, more overlap above), and all of them must deliver.

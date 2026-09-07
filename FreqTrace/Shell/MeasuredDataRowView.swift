@@ -53,6 +53,14 @@ struct MeasuredDataRowView: View {
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
+            // Input clip/headroom meter (user request): a VU-style vertical
+            // meter as the leftmost block, before Tracked Frequency -- a
+            // measured value, so it lives with the readouts, not the Controls
+            // row. Reads the true input sample peak (dBFS/clip), distinct from
+            // the SPL meters' spectral energy.
+            dataBlock(label: "INPUT") {
+                InputLevelMeter()
+            }
             dataBlock(label: "TRACKED FREQUENCY") {
                 VStack(alignment: .leading, spacing: 2) {
                     readingValue(

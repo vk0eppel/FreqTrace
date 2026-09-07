@@ -61,6 +61,9 @@ final class AudioPipelineViewModel {
     /// CONTEXT.md "Peak" -- "Tracked Frequency level"). See
     /// FrequencyTracker.trackedFrequencyLevelDb(fromMagnitudes:weighting:).
     private(set) var trackedFrequencyLevelDb: Double?
+    /// Live input sample-peak level (dBFS) from the most recent hop -- the
+    /// input clip/headroom meter's live bar. See AnalysisResult.inputPeakDbFS.
+    private(set) var inputPeakDbFS: Double?
     /// Top 2-3 Anomaly Candidates (ticket #5, ADR 0001, CONTEXT.md
     /// "Anomaly Candidate"), ranked by severity -- empty (not nil) when
     /// nothing is currently flagged, so the Measured Data row can show
@@ -181,18 +184,44 @@ final class AudioPipelineViewModel {
     enum PeakKey: Hashable {
         case splA
         case splC
+        case inputDbFS
         case rtaBar(Int)
     }
     private var peakTracker = PeakHoldTracker<PeakKey>()
 
     var splPeakDbA: Float? { peakTracker.peak(for: .splA) }
     var splPeakDbC: Float? { peakTracker.peak(for: .splC) }
+    /// Held peak of the input's true sample-peak level (dBFS) since the last
+    /// PEAK RESET -- the "worst case seen" the input clip/headroom meter
+    /// shows, and the basis for the latching clip flag (isInputClipping).
+    var inputPeakHoldDbFS: Float? { peakTracker.peak(for: .inputDbFS) }
     func peakForRTABar(_ index: Int) -> Float? { peakTracker.peak(for: .rtaBar(index)) }
+
+    /// Sample-peak dBFS at/above which the input counts as clipping (within
+    /// 1 dB of full scale). The clip flag latches via the held peak, so a
+    /// transient clip the tech didn't see stays flagged until PEAK RESET.
+    static let inputClipThresholdDbFS: Float = -1
+    /// True once the input has hit the clip threshold since the last reset
+    /// (latched -- reads the held peak, not the live level).
+    var isInputClipping: Bool {
+        guard let peak = inputPeakHoldDbFS else { return false }
+        return peak >= Self.inputClipThresholdDbFS
+    }
 
     /// The manual reset (AC: "A manual reset control clears all held
     /// peaks").
     func resetPeaks() {
         peakTracker.reset()
+    }
+
+    /// Clears just the input meter's held peak (and thus its clip latch) --
+    /// wired to tapping the input VU meter, a localized convenience distinct
+    /// from the global PEAK RESET which still clears every held peak.
+    func resetInputPeak() {
+        peakTracker.removeAll { key in
+            if case .inputDbFS = key { return true }
+            return false
+        }
     }
 
     /// Octave-banding resolution (user request: selectable "bars per
@@ -233,19 +262,23 @@ final class AudioPipelineViewModel {
     /// displayMode); Appearance is the deliberate persisted exception.
     var frequencyScale: FrequencyScale = .octave
 
-    /// Global A/C/Z weighting. Changing it clears every held peak (RTA bars
-    /// *and* SPL, unlike bandingResolution which clears only the RTA bars):
-    /// a held peak is a dBFS level captured under the previous weighting, and
-    /// A/C/Z shift that basis by up to ~20dB in the lows, so an old peak is
-    /// stale against the newly-weighted live values -- the peak envelope
-    /// visibly stopped tracking the live curve otherwise (user report). Same
-    /// rationale as bandingResolution clearing its peaks; the bars themselves
-    /// re-weight on the pipeline's next hop (setWeighting is async), so only
-    /// the peaks need clearing here.
+    /// Global A/C/Z weighting. Changing it clears the SPL + RTA-bar held peaks
+    /// (unlike bandingResolution which clears only the RTA bars): a held peak
+    /// is a dBFS level captured under the previous weighting, and A/C/Z shift
+    /// that basis by up to ~20dB in the lows, so an old peak is stale against
+    /// the newly-weighted live values -- the peak envelope visibly stopped
+    /// tracking the live curve otherwise (user report). The input clip peak
+    /// (.inputDbFS) is deliberately preserved: it's a raw time-domain
+    /// sample-peak, independent of Weighting, so a clip that happened is still
+    /// a real clip. The bars re-weight on the pipeline's next hop
+    /// (setWeighting is async), so only the peaks need clearing here.
     var weighting: Weighting = .default {
         didSet {
             guard weighting != oldValue else { return }
-            peakTracker.reset()
+            peakTracker.removeAll { key in
+                if case .inputDbFS = key { return false }
+                return true
+            }
             let pipeline = pipeline
             Task { await pipeline.setWeighting(weighting) }
         }
@@ -983,6 +1016,7 @@ final class AudioPipelineViewModel {
         splDbA = result.splDbA
         splDbC = result.splDbC
         trackedFrequencyLevelDb = result.trackedFrequencyLevelDb
+        inputPeakDbFS = result.inputPeakDbFS
         anomalyCandidates = result.anomalyCandidates
         fullScalePower = result.fullScalePower
         if result.splDbA.isFinite {
@@ -990,6 +1024,9 @@ final class AudioPipelineViewModel {
         }
         if result.splDbC.isFinite {
             peakTracker.update(Float(result.splDbC), for: .splC)
+        }
+        if result.inputPeakDbFS.isFinite {
+            peakTracker.update(Float(result.inputPeakDbFS), for: .inputDbFS)
         }
         // Computed here (every hop, regardless of whether RTA is the
         // currently-visible view) rather than from RTAView's onChange, so
@@ -1060,6 +1097,7 @@ final class AudioPipelineViewModel {
         splDbA = nil
         splDbC = nil
         trackedFrequencyLevelDb = nil
+        inputPeakDbFS = nil
         anomalyCandidates = []
     }
 

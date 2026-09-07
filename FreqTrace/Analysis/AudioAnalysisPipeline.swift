@@ -8,6 +8,7 @@
 //  AsyncStream. Everything here runs off the real-time audio thread.
 //
 
+import Accelerate
 import Foundation
 
 // nonisolated: pure value type, see CLAUDE.md Architecture (Swift 6 isolation opt-out convention).
@@ -36,6 +37,13 @@ nonisolated struct AnalysisResult: Sendable {
     /// CONTEXT.md "Peak" -- "Tracked Frequency level") -- distinct from
     /// splDb, which sums across the whole weighted spectrum.
     let trackedFrequencyLevelDb: Double
+    /// True time-domain sample peak of this hop's raw captured samples, in
+    /// dBFS (0 dBFS = full-scale sample |x|=1). Powers the input
+    /// clip/headroom meter -- deliberately NOT the FFT-summed level the SPL
+    /// meters use (that's energy, not a clip indicator): this is max|sample|
+    /// over the hop, the standard sample-peak a clip watchdog needs. Raw
+    /// capture, so it's independent of Weighting and Time Averaging.
+    let inputPeakDbFS: Double
     /// Top 2-3 Anomaly Candidates, ranked by severity (ticket #5, ADR
     /// 0001, CONTEXT.md "Anomaly Candidate"), or empty when nothing is
     /// currently flagged.
@@ -149,6 +157,19 @@ actor AudioAnalysisPipeline {
             await Task.yield()
             guard !Task.isCancelled else { break }
 
+            // True time-domain sample peak of this hop's raw samples
+            // (max|sample|), for the input clip/headroom meter. Every captured
+            // sample flows through exactly one hopBuffer (hops are contiguous
+            // ring-buffer reads), so per-hop max sees them all with no gaps.
+            // Computed on the raw capture here, before any windowing/FFT/
+            // weighting/blending -- the input's real digital level. 0 dBFS =
+            // full-scale sample; floored at -120 so pure silence is finite.
+            var hopPeakMagnitude: Float = 0
+            hopBuffer.withUnsafeBufferPointer { ptr in
+                vDSP_maxmgv(ptr.baseAddress!, 1, &hopPeakMagnitude, vDSP_Length(config.hopSize))
+            }
+            let inputPeakDbFS = 20 * log10(max(Double(hopPeakMagnitude), 1e-6))
+
             rollingWindow.removeFirst(config.hopSize)
             rollingWindow.append(contentsOf: hopBuffer)
 
@@ -195,7 +216,8 @@ actor AudioAnalysisPipeline {
                     continuation.yield(AnalysisResult(
                         trackedFrequencyHz: frequency, magnitudes: displaySpectrum,
                         splDbA: splDbA, splDbC: splDbC,
-                        trackedFrequencyLevelDb: levelDb, anomalyCandidates: anomalyCandidates,
+                        trackedFrequencyLevelDb: levelDb,
+                        inputPeakDbFS: inputPeakDbFS, anomalyCandidates: anomalyCandidates,
                         fullScalePower: tracker.fullScalePower, timestamp: Date()
                     ))
                 }
