@@ -69,6 +69,25 @@ final class AudioPipelineViewModel {
     /// nothing is currently flagged, so the Measured Data row can show
     /// nothing rather than a placeholder.
     private(set) var anomalyCandidates: [AnomalyCandidate] = []
+    /// Recently-cleared Anomaly Candidates (user request): the RECENT column
+    /// beside LIVE in the Measured Data row's anomaly block. Because a caught
+    /// ring vanishes the instant it settles (AnomalyDetector releases a track
+    /// within ~40-170ms of the tone falling away), a tech mid-show had no time
+    /// to read it -- so a candidate that goes from live to gone is kept here,
+    /// dimmed, for later reference. Deduped by frequency (a room resonance that
+    /// re-rings is one finding, not a new entry -- it leaves RECENT and returns
+    /// to LIVE), most-recent first, capped at `maxRecentAnomalies`. Cleared by
+    /// PEAK RESET (it's a held history, same semantics as the peak holds) and
+    /// on Stop. Derived here by diffing the live set hop-to-hop; the
+    /// HCMS-validated AnomalyDetector is untouched.
+    private(set) var recentAnomalies: [RecentAnomaly] = []
+    /// The highest 3 by severity are what LIVE shows; RECENT matches that count
+    /// so the split block keeps its existing 3-row height (it never grows
+    /// taller than the other Measured Data blocks).
+    static let maxRecentAnomalies = 3
+    /// Derives `recentAnomalies` by diffing the live set hop-to-hop (a pure
+    /// value type -- unit-tested in RecentAnomalyTrackerTests).
+    private var recentAnomalyTracker = RecentAnomalyTracker(maxCount: AudioPipelineViewModel.maxRecentAnomalies)
     /// Reference power a full-scale signal produces (FrequencyTracker.
     /// fullScalePower) -- the waterfall/RTA divide raw magnitudes by this
     /// before applying MagnitudeScaling's dB floor/ceiling. Defaults to 1
@@ -212,6 +231,10 @@ final class AudioPipelineViewModel {
     /// peaks").
     func resetPeaks() {
         peakTracker.reset()
+        // The RECENT anomaly column is a held history in the same spirit as the
+        // peak holds, so PEAK RESET clears it too (user request).
+        recentAnomalyTracker.reset()
+        recentAnomalies = []
     }
 
     /// Clears just the input meter's held peak (and thus its clip latch) --
@@ -1018,6 +1041,7 @@ final class AudioPipelineViewModel {
         trackedFrequencyLevelDb = result.trackedFrequencyLevelDb
         inputPeakDbFS = result.inputPeakDbFS
         anomalyCandidates = result.anomalyCandidates
+        updateRecentAnomalies(from: result.anomalyCandidates)
         fullScalePower = result.fullScalePower
         if result.splDbA.isFinite {
             peakTracker.update(Float(result.splDbA), for: .splA)
@@ -1039,6 +1063,13 @@ final class AudioPipelineViewModel {
         for (index, value) in bars.enumerated() {
             peakTracker.update(value, for: .rtaBar(index))
         }
+    }
+
+    /// Advances the RECENT anomaly history one hop with the live set (see
+    /// `recentAnomalies` / RecentAnomalyTracker).
+    private func updateRecentAnomalies(from live: [AnomalyCandidate]) {
+        recentAnomalyTracker.update(live: live)
+        recentAnomalies = recentAnomalyTracker.candidates
     }
 
     /// Reacts to Core Audio reporting the device list changed -- the single
@@ -1099,6 +1130,8 @@ final class AudioPipelineViewModel {
         trackedFrequencyLevelDb = nil
         inputPeakDbFS = nil
         anomalyCandidates = []
+        recentAnomalyTracker.reset()
+        recentAnomalies = []
     }
 
     /// Tracked Frequency hero readout, split into number + unit so the row

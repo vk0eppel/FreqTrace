@@ -90,11 +90,30 @@ struct MeasuredDataRowView: View {
                 }
             }
             dataBlock(label: "ANOMALY CANDIDATES") {
-                fixedHeight(reference: anomalyCandidatesReference) {
-                    if !trackedFrequencyViewModel.anomalyCandidates.isEmpty {
-                        VStack(alignment: .leading, spacing: 6) {
-                            ForEach(Array(trackedFrequencyViewModel.anomalyCandidates.enumerated()), id: \.element.id) { rank, candidate in
-                                anomalyRow(candidate, rank: rank)
+                // Split into LIVE (currently ringing, full severity emphasis)
+                // and RECENT (cleared candidates kept for reference, dimmed) --
+                // user request: a caught ring settles within ~40-170ms, too
+                // fast to read mid-show, so RECENT holds the last few.
+                HStack(alignment: .top, spacing: 14) {
+                    anomalyColumn(sublabel: "LIVE") {
+                        if !trackedFrequencyViewModel.anomalyCandidates.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(Array(trackedFrequencyViewModel.anomalyCandidates.enumerated()), id: \.element.id) { rank, candidate in
+                                    anomalyRow(candidate, rank: rank)
+                                }
+                            }
+                        }
+                    }
+                    Rectangle()
+                        .fill(theme.border)
+                        .frame(width: 1)
+                        .frame(maxHeight: .infinity)
+                    anomalyColumn(sublabel: "RECENT") {
+                        if !trackedFrequencyViewModel.recentAnomalies.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(trackedFrequencyViewModel.recentAnomalies) { recent in
+                                    recentAnomalyRow(recent)
+                                }
                             }
                         }
                     }
@@ -112,12 +131,17 @@ struct MeasuredDataRowView: View {
 
     // The two SPL meters as one group: the A and C panels side by side, with
     // a single slim OFFSET strip spanning beneath both (the offset is shared,
-    // so it belongs to neither panel alone -- user request). The group sits
-    // in the outer top-aligned row like any other block; the strip makes it a
-    // little taller than the others, which only trims the flexible waterfall
-    // above by a few pt (the data row sizes to content).
+    // so it belongs to neither panel alone -- user request). The group sits in
+    // the outer top-aligned row and is pinned to exactly one block's height
+    // (dataBlockOuterHeight). The two panels + spacing + strip previously had a
+    // combined minimum a bit *over* that height, so the group overflowed its
+    // frame and rendered ~13pt taller than its neighbours, bottom edge hanging
+    // below theirs (user report: "the SPL fields are a little bit taller"). The
+    // internal vertical budget below (panel padding, panel spacing, strip
+    // padding, group spacing) is trimmed just enough that the content genuinely
+    // fits 136pt, so the bottoms line up.
     private var splGroup: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 6) {
             HStack(alignment: .top, spacing: 12) {
                 splBlock(
                     label: "SPL (A)",
@@ -149,7 +173,7 @@ struct MeasuredDataRowView: View {
     // of height between the two panels and the shared offset strip. Same
     // caption + recessed meterPanel treatment as the other blocks otherwise.
     private func splBlock(label: String, reading: MeasuredReading, peak: String?) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(label)
                 .font(.system(size: Typography.captionSize, weight: .semibold))
                 .tracking(0.8)
@@ -163,7 +187,7 @@ struct MeasuredDataRowView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .padding(.horizontal, 20)
-        .padding(.vertical, 12)
+        .padding(.vertical, 8)
         .meterPanel()
     }
 
@@ -188,7 +212,7 @@ struct MeasuredDataRowView: View {
             )
         }
         .padding(.horizontal, 20)
-        .padding(.vertical, 6)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .center)
         .meterPanel()
     }
@@ -223,6 +247,39 @@ struct MeasuredDataRowView: View {
                 highestSeverityPulse = true
             }
         }
+    }
+
+    // One side of the split anomaly block: a small LIVE/RECENT sub-label over
+    // a value area that reserves the same 3-row height as the other, so the two
+    // columns line up and the block never grows taller than its neighbours.
+    private func anomalyColumn(sublabel: String, @ViewBuilder content: () -> some View) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(sublabel)
+                .font(.system(size: Typography.subCaptionSize, weight: .semibold))
+                .tracking(0.6)
+                .foregroundStyle(theme.textFaint)
+            fixedHeight(reference: anomalyCandidatesReference) {
+                content()
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // A cleared candidate in the RECENT column: dimmed (no stripe, no glow, no
+    // pulse -- it isn't ringing anymore), showing frequency + the loudest level
+    // it reached (dBFS). Uniform size/opacity, since these aren't severity-
+    // ranked the way the LIVE rows are.
+    private func recentAnomalyRow(_ recent: RecentAnomaly) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(formattedAnomalyFrequency(recent.frequencyHz))
+                .font(.system(size: 15, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.textDim)
+            Text(String(format: "%.0f dB", recent.peakDb))
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .foregroundStyle(theme.textFaint)
+        }
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func formattedAnomalyFrequency(_ hz: Double) -> String {
